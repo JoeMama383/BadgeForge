@@ -103,13 +103,15 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.12" not in control:
-    errors.append("control version is not 1.0.12")
+if "Version: 1.0.13" not in control:
+    errors.append("control version is not 1.0.13")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.12</string>" not in info:
-    errors.append("preference bundle version is not 1.0.12")
-if "BadgeForge 1.0.12 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.12")
+if "<string>1.0.13</string>" not in info:
+    errors.append("preference bundle version is not 1.0.13")
+if "BadgeForge 1.0.13 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.13")
+if "BadgeForge 1.0.13 probe start" not in source:
+    errors.append("runtime probe banner is not 1.0.13")
 
 for token in [
     "LCPParseColorString",
@@ -161,13 +163,20 @@ for row in color_rows:
         if key not in nested:
             errors.append(f"color row {row.get('label')} missing nested libcolorpicker {key}")
 
-# v1.0.11: paint a real solid background raster rather than relying on the
-# v1.0.9/v1.0.10 overlay geometry that only became visible reliably in Dock.
+# v1.0.13: use the stock badge renderer lifecycle instead of replacing the
+# background with a custom 2x2 bitmap. This is required for Home Screen badge
+# reuse/app-close refresh, while preserving the original border-layer path.
 for token in [
-    "BFSolidBadgeImage",
-    "BFSolidBadgeImageCache",
-    "resizableImageWithCapInsets:UIEdgeInsetsZero",
-    "imageView.image = BFSolidBadgeImage(palette.backgroundColor)",
+    "BFPaletteKey",
+    "BFPaletteForBadge",
+    "BFStorePaletteForBadgeAndIcon",
+    "BFColoredTextRaster",
+    "BFUpdateBadgeColors",
+    "imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate",
+    "imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal",
+    "- (void)updateBadgeColors",
+    "%hook SBDarkeningImageView",
+    "%hook UIImageView",
     "layer.borderWidth = BFBorderEnabled ? BFBorderWidth : 0.0",
     "layer.masksToBounds = YES",
     "BFApplyBadgeWithTextImageHint",
@@ -178,11 +187,20 @@ for token in [
     "_zoomInWithTextImage:(UIImage *)image animator:(id)animator",
 ]:
     if token not in source:
-        errors.append(f"Tweak.xm missing v1.0.11 regression-safe badge component: {token}")
+        errors.append(f"Tweak.xm missing v1.0.13 stock-renderer lifecycle component: {token}")
 
-for forbidden in ["BFFillLayerKey", "BadgeForgeFill", "BFSyncFillGeometry"]:
+for forbidden in [
+    "BFFillLayerKey",
+    "BadgeForgeFill",
+    "BFSyncFillGeometry",
+    "BFSolidBadgeImage",
+    "BFSolidBadgeImageCache",
+    "resizableImageWithCapInsets:UIEdgeInsetsZero",
+    "BFRestoreBadge(self);",
+    "0.05 * NSEC_PER_SEC",
+]:
     if forbidden in source:
-        errors.append(f"Tweak.xm still contains retired v1.0.10 fill-geometry component: {forbidden}")
+        errors.append(f"Tweak.xm still contains retired/racy badge renderer component: {forbidden}")
 
 
 # The libcolorpicker rows remain nested-only on disk; the preference controller

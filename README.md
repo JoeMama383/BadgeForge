@@ -33,6 +33,14 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.13
+
+- Replace the failed 2x2 custom badge-background raster path with the stock badge image/template-tint lifecycle used by the reference implementation.
+- Store each badge's computed palette before `configureForIcon:` / `configureAnimatedForIcon:` and make BadgeForge the final writer after SpringBoard configuration and `updateBadgeColors`.
+- Intercept late `SBDarkeningImageView` background image/color/tint replacements only when the view belongs to an `SBIconBadgeView`, preventing the Home Screen app-close refresh from restoring stock red.
+- Pre-color incoming badge-count rasters before SpringBoard crossfade/zoom/resize installation, preventing a later stock white tint reset from discarding the selected text color.
+- Keep the original `_backgroundView.layer` border mechanism and adjustable width; remove the repeated 50 ms repaint race and stop restoring stale snapshots during normal badge reuse.
+
 ## v1.0.12
 
 - Build-only fix: remove two dead private-API CGSize helpers (`BFSendSize0` and `BFSendSize1`) that were no longer referenced after the v1.0.11 badge-painting rework and were promoted from warnings to errors by the CI compiler.
