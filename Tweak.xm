@@ -969,16 +969,34 @@ static void BFStorePaletteForBadgeAndIcon(id badge, id icon) {
 }
 
 static UIImage *BFColoredTextRaster(UIImage *image, UIColor *color) {
-    if (!image || !color) return image;
-    if (@available(iOS 13.0, *)) {
-        // Bake the requested foreground color into the raster that SpringBoard
-        // receives. This survives a later stock tintColor reset to white.
-        return [image imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
+    if (!image || !image.CGImage || !color) return image;
+
+    // Match Tinge's proven transition path: draw the glyph mask into a fresh
+    // raster filled with the requested foreground color before SpringBoard
+    // receives it. This keeps app-open/app-close crossfades from restoring
+    // Apple's white text image.
+    CGSize size = image.size;
+    CGFloat scale = image.scale > 0.0 ? image.scale : UIScreen.mainScreen.scale;
+    UIGraphicsBeginImageContextWithOptions(size, NO, scale);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    if (!context) {
+        UIGraphicsEndImageContext();
+        return image;
     }
-    return image;
+
+    CGRect rect = (CGRect){CGPointZero, size};
+    CGContextTranslateCTM(context, 0.0, size.height);
+    CGContextScaleCTM(context, 1.0, -1.0);
+    CGContextClipToMask(context, rect, image.CGImage);
+    CGContextSetFillColorWithColor(context, color.CGColor);
+    CGContextFillRect(context, rect);
+
+    UIImage *colored = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return colored ?: image;
 }
 
-static void BFUpdateBadgeColors(id badge, UIImage *textImageHint) {
+static void BFUpdateBadgeColors(id badge) {
     if (!badge) return;
     if (!BFEnabled) {
         BFRestoreBadge(badge);
@@ -991,70 +1009,48 @@ static void BFUpdateBadgeColors(id badge, UIImage *textImageHint) {
     UIView *textView = BFTextView(badge);
     if (!backgroundView || !textView) return;
 
-    id icon = BFResolveIconForBadge(badge);
-    BFProbeDumpBadge(badge, icon);
-
     BFPalette *palette = BFPaletteForBadge(badge);
     if (!palette) return;
 
-    // Mirror the stock/Tinge-compatible renderer instead of replacing Apple's
-    // badge raster. If SpringBoard has installed a background image, preserve
-    // its geometry/mask and make it a template; tintColor then owns its color.
-    // backgroundColor is also set as the iOS 17 fallback because freshly
-    // created SBDarkeningImageView instances can exist briefly with image=nil.
-    if ([backgroundView isKindOfClass:[UIImageView class]]) {
-        UIImageView *imageView = (UIImageView *)backgroundView;
-        UIImage *stockImage = imageView.image;
-        if (stockImage && stockImage.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-            imageView.image = [stockImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        }
-        imageView.tintColor = palette.backgroundColor;
-    }
-    backgroundView.backgroundColor = palette.backgroundColor;
-    backgroundView.tintColor = palette.backgroundColor;
-
-    // The Home Screen can replace _textView's image after app-close animation.
-    // Feed it a foreground-colored AlwaysOriginal raster when an incoming image
-    // is available so a later stock white tint cannot erase the preference.
+    // This intentionally mirrors the original Tinge renderer rather than
+    // inventing a parallel fill view/layer. Both stock badge image views are
+    // kept intact and converted to template images; UIKit then renders the
+    // exact stock geometry with our colors.
     if ([textView isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)textView;
-        UIImage *image = textImageHint ?: imageView.image;
-        if (image) imageView.image = BFColoredTextRaster(image, palette.textColor);
+        UIImage *image = imageView.image;
+        if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+            imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        }
         imageView.tintColor = palette.textColor;
     } else if ([textView isKindOfClass:[UILabel class]]) {
         ((UILabel *)textView).textColor = palette.textColor;
     }
 
+    if ([backgroundView isKindOfClass:[UIImageView class]]) {
+        UIImageView *imageView = (UIImageView *)backgroundView;
+        UIImage *image = imageView.image;
+        if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+            imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        }
+        imageView.tintColor = palette.backgroundColor;
+    }
+    backgroundView.tintColor = palette.backgroundColor;
+    backgroundView.backgroundColor = palette.backgroundColor;
+
     CALayer *layer = backgroundView.layer;
     layer.borderWidth = BFBorderEnabled ? BFBorderWidth : 0.0;
     layer.borderColor = (BFBorderEnabled ? palette.borderColor : UIColor.clearColor).CGColor;
-
-    // Stock badge height is 24 pt on the tested iOS 17 layout. Use actual
-    // bounds when available and the stock 12 pt radius while it is zero-sized.
-    CGFloat height = CGRectGetHeight(backgroundView.bounds);
-    layer.cornerRadius = height > 0.0 ? height * 0.5 : 12.0;
-    layer.masksToBounds = YES;
+    layer.cornerRadius = 12.0;
     if (@available(iOS 13.0, *)) layer.cornerCurve = kCACornerCurveContinuous;
+    layer.masksToBounds = YES;
 
     objc_setAssociatedObject(badge, BFAppliedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     BFProbePostApply(badge, palette, backgroundView, textView);
 }
 
-static void BFApplyBadgeWithTextImageHint(id badge, UIImage *textImageHint) {
-    BFUpdateBadgeColors(badge, textImageHint);
-}
-
 static void BFApplyBadge(id badge) {
-    BFApplyBadgeWithTextImageHint(badge, nil);
-}
-
-static void BFScheduleFinalBadgeReapply(id badge) {
-    if (!badge) return;
-    __weak id weakBadge = badge;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        id strongBadge = weakBadge;
-        if (strongBadge) BFApplyBadge(strongBadge);
-    });
+    BFUpdateBadgeColors(badge);
 }
 
 static void BFRefreshAllBadges(void) {
@@ -1093,22 +1089,6 @@ static void BFPerformRespring(CFNotificationCenterRef center, void *observer, CF
     });
 }
 
-static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
-    if (!root || !icon || depth > 5) return;
-    Class badgeClass = NSClassFromString(@"SBIconBadgeView");
-    if (!badgeClass) return;
-
-    for (UIView *subview in root.subviews) {
-        if ([subview isKindOfClass:badgeClass]) {
-            BFStorePaletteForBadgeAndIcon(subview, icon);
-            BFRegisterBadge(subview);
-            BFApplyBadge(subview);
-            continue;
-        }
-        BFBindBadgeDescendants(subview, icon, depth + 1);
-    }
-}
-
 #pragma mark - SBIconBadgeView
 
 %hook SBIconBadgeView
@@ -1116,18 +1096,18 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 - (void)configureForIcon:(id)icon infoProvider:(id)provider {
     BFProbeLog(@"HOOK configureForIcon badge=%p class=%@ icon=%p iconClass=%@ provider=%@", self, NSStringFromClass([self class]), icon, NSStringFromClass([icon class]), NSStringFromClass([provider class]));
 
-    // Compute/store palette before SpringBoard configures the reusable badge,
-    // then perform the final paint after %orig.
+    // Tinge computes/stores the per-badge palette before the original
+    // configure call, then paints after it. Reproduce that ordering exactly.
     BFStorePaletteForBadgeAndIcon(self, icon);
     objc_setAssociatedObject(self, BFSnapshotKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, BFAppliedKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     %orig;
 
+    BFProbeDumpBadge(self, icon);
     BFCaptureSnapshot(self);
     BFRegisterBadge(self);
-    BFUpdateBadgeColors(self, nil);
-    BFScheduleFinalBadgeReapply(self);
+    BFUpdateBadgeColors(self);
 }
 
 - (void)configureAnimatedForIcon:(id)icon infoProvider:(id)provider animator:(id)animator {
@@ -1139,167 +1119,30 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 
     %orig;
 
+    BFProbeDumpBadge(self, icon);
     BFCaptureSnapshot(self);
     BFRegisterBadge(self);
-    BFUpdateBadgeColors(self, nil);
-    BFScheduleFinalBadgeReapply(self);
-}
-
-- (void)_configureAnimatedForText:(NSString *)text highlighted:(BOOL)highlighted animator:(id)animator {
-    %orig;
-    BFProbeLog(@"HOOK final text configure badge=%p text=%@ highlighted=%d", self, text, highlighted);
-    BFUpdateBadgeColors(self, nil);
-    BFScheduleFinalBadgeReapply(self);
+    BFUpdateBadgeColors(self);
 }
 
 - (void)_crossfadeToTextImage:(UIImage *)image animator:(id)animator {
     BFPalette *palette = BFPaletteForBadge(self);
-    UIImage *coloredImage = palette ? BFColoredTextRaster(image, palette.textColor) : image;
+    UIImage *coloredImage = (BFEnabled && palette) ? BFColoredTextRaster(image, palette.textColor) : image;
     %orig(coloredImage, animator);
-    BFUpdateBadgeColors(self, coloredImage);
-    BFScheduleFinalBadgeReapply(self);
-}
-
-- (void)_zoomInWithTextImage:(UIImage *)image animator:(id)animator {
-    BFPalette *palette = BFPaletteForBadge(self);
-    UIImage *coloredImage = palette ? BFColoredTextRaster(image, palette.textColor) : image;
-    %orig(coloredImage, animator);
-    BFUpdateBadgeColors(self, coloredImage);
-}
-
-- (void)_resizeForTextImage:(UIImage *)image {
-    BFPalette *palette = BFPaletteForBadge(self);
-    UIImage *coloredImage = palette ? BFColoredTextRaster(image, palette.textColor) : image;
-    %orig(coloredImage);
-    BFUpdateBadgeColors(self, coloredImage);
-}
-
-- (void)_layOutTextImageView:(UIImageView *)imageView {
-    %orig;
-    BFUpdateBadgeColors(self, imageView.image);
 }
 
 - (void)updateBadgeColors {
-    // The probe proves this late refresh selector exists on the user's runtime.
-    // Let the existing implementation run, then make BadgeForge the final
-    // writer so app-close/Home Screen refresh cannot restore stock red/white.
-    %orig;
-    BFProbeLog(@"HOOK updateBadgeColors badge=%p", self);
-    BFUpdateBadgeColors(self, nil);
+    // The device runtime exposes this late badge-color refresh selector. Do
+    // not call the previous implementation: doing so allowed another writer
+    // to restore stock red/white during Home Screen/app-close refresh. Any
+    // caller of this selector now lands on BadgeForge's single renderer.
+    BFProbeLog(@"HOOK updateBadgeColors authoritative badge=%p", self);
+    BFUpdateBadgeColors(self);
 }
 
 - (void)drawRect:(CGRect)rect {
     %orig;
-    BFUpdateBadgeColors(self, nil);
-}
-
-- (void)layoutSubviews {
-    %orig;
-    BFUpdateBadgeColors(self, nil);
-}
-
-- (void)didMoveToWindow {
-    %orig;
-    if (self.window) {
-        BFRegisterBadge(self);
-        BFUpdateBadgeColors(self, nil);
-        BFScheduleFinalBadgeReapply(self);
-    }
-}
-
-%end
-
-%hook SBIconView
-
-- (void)layoutSubviews {
-    %orig;
-    id icon = BFSendObject0(self, @"icon");
-    if (!icon) icon = BFIvarObject(self, "_icon");
-    if (!icon) return;
-
-    id badge = BFIvarObject(self, "_badgeView");
-    if ([badge isKindOfClass:NSClassFromString(@"SBIconBadgeView")]) {
-        BFStorePaletteForBadgeAndIcon(badge, icon);
-        BFRegisterBadge(badge);
-        BFApplyBadge(badge);
-    } else {
-        BFBindBadgeDescendants(self, icon, 0);
-    }
-}
-
-%end
-
-%hook SBDarkeningImageView
-
-- (void)setImage:(UIImage *)image {
-    id badge = self.superview;
-    Class badgeClass = NSClassFromString(@"SBIconBadgeView");
-    if (BFEnabled && badgeClass && [badge isKindOfClass:badgeClass]) {
-        BFPalette *palette = BFPaletteForBadge(badge);
-        UIImage *templateImage = image;
-        if (templateImage && templateImage.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-            templateImage = [templateImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        }
-        %orig(templateImage);
-        if (palette) {
-            self.tintColor = palette.backgroundColor;
-        }
-        return;
-    }
-    %orig;
-}
-
-- (void)setBackgroundColor:(UIColor *)color {
-    id badge = self.superview;
-    Class badgeClass = NSClassFromString(@"SBIconBadgeView");
-    if (BFEnabled && badgeClass && [badge isKindOfClass:badgeClass]) {
-        BFPalette *palette = BFPaletteForBadge(badge);
-        if (palette) {
-            %orig(palette.backgroundColor);
-            return;
-        }
-    }
-    %orig;
-}
-
-- (void)setTintColor:(UIColor *)color {
-    id badge = self.superview;
-    Class badgeClass = NSClassFromString(@"SBIconBadgeView");
-    if (BFEnabled && badgeClass && [badge isKindOfClass:badgeClass]) {
-        BFPalette *palette = BFPaletteForBadge(badge);
-        if (palette) {
-            %orig(palette.backgroundColor);
-            return;
-        }
-    }
-    %orig;
-}
-
-%end
-
-%hook UIImageView
-
-- (void)setImage:(UIImage *)image {
-    UIView *background = self.superview;
-    UIView *badge = background.superview;
-    Class darkeningClass = NSClassFromString(@"SBDarkeningImageView");
-    Class badgeClass = NSClassFromString(@"SBIconBadgeView");
-
-    // _textView is a plain UIImageView nested inside the badge's
-    // SBDarkeningImageView. Intercept the exact late image replacement that
-    // occurs when the Home Screen returns from an app, but leave every other
-    // UIImageView in SpringBoard untouched.
-    if (BFEnabled && darkeningClass && badgeClass &&
-        [background isKindOfClass:darkeningClass] &&
-        [badge isKindOfClass:badgeClass]) {
-        BFPalette *palette = BFPaletteForBadge(badge);
-        UIImage *coloredImage = palette ? BFColoredTextRaster(image, palette.textColor) : image;
-        %orig(coloredImage);
-        if (palette) self.tintColor = palette.textColor;
-        return;
-    }
-
-    %orig;
+    BFUpdateBadgeColors(self);
 }
 
 %end
@@ -1307,7 +1150,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
-        BFProbeLog(@"\n\n===== BadgeForge 1.0.13 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.14 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
         BFProbeJailbreakEnvironment();
         BFProbeDiscoverBadgeClasses();
         Class badgeClass = NSClassFromString(@"SBIconBadgeView");

@@ -33,6 +33,15 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.14
+
+- Rebuild badge painting around the narrow lifecycle used by the supplied Tinge reference: compute/store the palette before SpringBoard configuration, then paint the stock `_backgroundView` and `_textView` after configuration and after `drawRect:`.
+- Make `updateBadgeColors` authoritative for BadgeForge and intentionally do not call the previous implementation, preventing a competing late writer from restoring stock red/white during Home Screen and app-close refresh.
+- Remove the broad `SBIconView`, `SBDarkeningImageView`, generic `UIImageView`, layout, and delayed repaint hooks that produced Dock/Home Screen divergence.
+- Match the reference renderer's exact stock-image behavior: template-render both badge image views, set background tint + background color, use the original border layer with the configured width/color, and use the stock 12 pt continuous corner radius.
+- Recolor crossfade text rasters with a Core Graphics mask/fill path before SpringBoard receives them, preserving static/adaptive text color through badge transitions.
+- Preserve the working iOS 17 adaptive icon-image extraction and the v1.0.10 color preference persistence fixes.
+
 ## v1.0.13
 
 - Replace the failed 2x2 custom badge-background raster path with the stock badge image/template-tint lifecycle used by the reference implementation.

@@ -32,7 +32,7 @@ for hook in [
     "configureForIcon:(id)icon infoProvider:(id)provider",
     "configureAnimatedForIcon:(id)icon infoProvider:(id)provider animator:(id)animator",
     "_crossfadeToTextImage:(UIImage *)image animator:(id)animator",
-    "layoutSubviews",
+    "updateBadgeColors",
     "drawRect:(CGRect)rect",
 ]:
     if hook not in source:
@@ -87,8 +87,7 @@ for token in [
     "CGFloat continuousCornerRadius;",
     "info.continuousCornerRadius = 12.0;",
     "BFResolveIconForBadge",
-    "%hook SBIconView",
-    "BFBindBadgeDescendants",
+    "BFStorePaletteForBadgeAndIcon",
 ]:
     if token not in source:
         errors.append(f"Tweak.xm missing iOS 17 icon-binding component: {token}")
@@ -103,15 +102,15 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.13" not in control:
-    errors.append("control version is not 1.0.13")
+if "Version: 1.0.14" not in control:
+    errors.append("control version is not 1.0.14")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.13</string>" not in info:
-    errors.append("preference bundle version is not 1.0.13")
-if "BadgeForge 1.0.13 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.13")
-if "BadgeForge 1.0.13 probe start" not in source:
-    errors.append("runtime probe banner is not 1.0.13")
+if "<string>1.0.14</string>" not in info:
+    errors.append("preference bundle version is not 1.0.14")
+if "BadgeForge 1.0.14 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.14")
+if "BadgeForge 1.0.14 probe start" not in source:
+    errors.append("runtime probe banner is not 1.0.14")
 
 for token in [
     "LCPParseColorString",
@@ -163,9 +162,9 @@ for row in color_rows:
         if key not in nested:
             errors.append(f"color row {row.get('label')} missing nested libcolorpicker {key}")
 
-# v1.0.13: use the stock badge renderer lifecycle instead of replacing the
-# background with a custom 2x2 bitmap. This is required for Home Screen badge
-# reuse/app-close refresh, while preserving the original border-layer path.
+# v1.0.14: mirror the supplied Tinge renderer/lifecycle narrowly. The probe
+# proved adaptive colors are computed correctly for Messages/Outlook/Teams; the
+# remaining bug is a later renderer overwrite, not icon-color extraction.
 for token in [
     "BFPaletteKey",
     "BFPaletteForBadge",
@@ -173,35 +172,48 @@ for token in [
     "BFColoredTextRaster",
     "BFUpdateBadgeColors",
     "imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate",
-    "imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal",
+    "CGContextClipToMask",
+    "CGContextSetFillColorWithColor",
     "- (void)updateBadgeColors",
-    "%hook SBDarkeningImageView",
-    "%hook UIImageView",
+    "HOOK updateBadgeColors authoritative",
     "layer.borderWidth = BFBorderEnabled ? BFBorderWidth : 0.0",
+    "layer.cornerRadius = 12.0",
     "layer.masksToBounds = YES",
-    "BFApplyBadgeWithTextImageHint",
-    "BFScheduleFinalBadgeReapply",
-    "_configureAnimatedForText:(NSString *)text highlighted:(BOOL)highlighted animator:(id)animator",
-    "_resizeForTextImage:(UIImage *)image",
-    "_layOutTextImageView:(UIImageView *)imageView",
-    "_zoomInWithTextImage:(UIImage *)image animator:(id)animator",
 ]:
     if token not in source:
-        errors.append(f"Tweak.xm missing v1.0.13 stock-renderer lifecycle component: {token}")
+        errors.append(f"Tweak.xm missing v1.0.14 Tinge-parity renderer component: {token}")
 
+# The old wide interception set caused different render results between Dock and
+# Home Screen. Keep the lifecycle surface intentionally narrow.
 for forbidden in [
+    "%hook SBIconView",
+    "%hook SBDarkeningImageView",
+    "%hook UIImageView",
+    "BFScheduleFinalBadgeReapply",
+    "BFBindBadgeDescendants",
+    "_configureAnimatedForText:(NSString *)text",
+    "_zoomInWithTextImage:(UIImage *)image",
+    "_resizeForTextImage:(UIImage *)image",
+    "_layOutTextImageView:(UIImageView *)imageView",
+    "- (void)layoutSubviews",
+    "- (void)didMoveToWindow",
+    "imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal",
     "BFFillLayerKey",
     "BadgeForgeFill",
     "BFSyncFillGeometry",
     "BFSolidBadgeImage",
     "BFSolidBadgeImageCache",
     "resizableImageWithCapInsets:UIEdgeInsetsZero",
-    "BFRestoreBadge(self);",
     "0.05 * NSEC_PER_SEC",
 ]:
     if forbidden in source:
         errors.append(f"Tweak.xm still contains retired/racy badge renderer component: {forbidden}")
 
+# updateBadgeColors must be the final writer. Calling %orig here reintroduces the
+# stock/competing color writer that the on-device screenshots exposed.
+update_hook = source.split("- (void)updateBadgeColors", 1)[1].split("- (void)drawRect", 1)[0]
+if "%orig" in update_hook:
+    errors.append("updateBadgeColors still calls %orig instead of being authoritative")
 
 # The libcolorpicker rows remain nested-only on disk; the preference controller
 # may only update the runtime fallback displayed by the cell from the already
