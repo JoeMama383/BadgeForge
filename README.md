@@ -33,6 +33,11 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.12
+
+- Build-only fix: remove two dead private-API CGSize helpers (`BFSendSize0` and `BFSendSize1`) that were no longer referenced after the v1.0.11 badge-painting rework and were promoted from warnings to errors by the CI compiler.
+- No runtime badge behavior, preference persistence, text coloring, adaptive coloring, or border logic changed from v1.0.11.
+
 ## v1.0.11
 
 - Replace the iOS 17 stock red badge background raster with a real solid-color resizable image, so Home Screen badges keep the computed Adaptive/Static color even when SpringBoard assigns final badge bounds after configuration.

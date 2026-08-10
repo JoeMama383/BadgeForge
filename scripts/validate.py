@@ -103,13 +103,13 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.11" not in control:
-    errors.append("control version is not 1.0.11")
+if "Version: 1.0.12" not in control:
+    errors.append("control version is not 1.0.12")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.11</string>" not in info:
-    errors.append("preference bundle version is not 1.0.11")
-if "BadgeForge 1.0.11 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.11")
+if "<string>1.0.12</string>" not in info:
+    errors.append("preference bundle version is not 1.0.12")
+if "BadgeForge 1.0.12 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.12")
 
 for token in [
     "LCPParseColorString",
@@ -200,6 +200,12 @@ for token in [
         errors.append(f"preference controller missing v1.0.11 saved-color display sync: {token}")
 if "reloadSpecifiers" in prefs_controller:
     errors.append("preference controller still reloads the entire list and can disrupt Border Width editing")
+
+# v1.0.12: these helpers became dead code in v1.0.11. The CI toolchain treats
+# -Wunused-function as an error, so do not reintroduce them unless they are used.
+for forbidden in ["BFSendSize0", "BFSendSize1"]:
+    if forbidden in source:
+        errors.append(f"Tweak.xm reintroduces unused helper that breaks -Werror build: {forbidden}")
 
 if errors:
     print("\nFAILED")

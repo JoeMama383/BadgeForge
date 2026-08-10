@@ -348,20 +348,6 @@ static id BFSendObject0(id object, NSString *selectorName) {
     return ((id (*)(id, SEL))objc_msgSend)(object, selector);
 }
 
-static CGSize BFSendSize0(id object, NSString *selectorName) {
-    if (!object) return CGSizeZero;
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![object respondsToSelector:selector]) return CGSizeZero;
-    return ((CGSize (*)(id, SEL))objc_msgSend)(object, selector);
-}
-
-static CGSize BFSendSize1(id object, NSString *selectorName, id argument) {
-    if (!object) return CGSizeZero;
-    SEL selector = NSSelectorFromString(selectorName);
-    if (![object respondsToSelector:selector]) return CGSizeZero;
-    return ((CGSize (*)(id, SEL, id))objc_msgSend)(object, selector, argument);
-}
-
 static BOOL BFSendBool1(id object, NSString *selectorName, id argument) {
     if (!object) return NO;
     SEL selector = NSSelectorFromString(selectorName);
