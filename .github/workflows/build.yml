@@ -17,10 +17,19 @@ jobs:
           brew install ldid xz
           command -v ldid
 
-      - name: Install Theos
+      - name: Install Theos and patched iOS SDK
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          export THEOS="$HOME/theos"
+          "$THEOS/bin/install-sdk" latest
+          test -d "$THEOS/sdks/iPhoneOS16.5.sdk/System/Library/PrivateFrameworks/Preferences.framework"
+
+      - name: Validate source
+        run: |
+          python3 scripts/validate.py
 
       - name: Build rootless package
         run: |

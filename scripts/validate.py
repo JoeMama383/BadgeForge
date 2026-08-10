@@ -60,14 +60,22 @@ if not re.search(r"brew\s+install[^\n]*\bldid\b", workflow):
 if "command -v ldid" not in workflow:
     errors.append("GitHub Actions workflow does not verify ldid is on PATH")
 
+if '"$THEOS/bin/install-sdk" latest' not in workflow:
+    errors.append("GitHub Actions workflow does not install a patched Theos SDK")
+if "PrivateFrameworks/Preferences.framework" not in workflow:
+    errors.append("GitHub Actions workflow does not verify the Preferences private framework SDK stub")
+makefile = (root / "Makefile").read_text()
+if "export TARGET = iphone:clang:16.5:15.0" not in makefile:
+    errors.append("root Makefile does not export the patched SDK target to subprojects")
+
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.2" not in control:
-    errors.append("control version is not 1.0.2")
+if "Version: 1.0.3" not in control:
+    errors.append("control version is not 1.0.3")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.2</string>" not in info:
-    errors.append("preference bundle version is not 1.0.2")
-if "BadgeForge 1.0.2 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.2")
+if "<string>1.0.3</string>" not in info:
+    errors.append("preference bundle version is not 1.0.3")
+if "BadgeForge 1.0.3 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.3")
 
 if errors:
     print("\nFAILED")
