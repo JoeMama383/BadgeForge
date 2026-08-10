@@ -4,6 +4,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <math.h>
+#import <stdlib.h>
 
 // BadgeForge is intentionally implemented without private SpringBoard headers.
 // The only private surface we hook is SBIconBadgeView, and all other private
@@ -201,7 +202,7 @@ static UIColor *BFDominantColorFromImage(UIImage *image) {
     const size_t width = 32;
     const size_t height = 32;
     const size_t bytesPerRow = width * 4;
-    uint8_t *pixels = calloc(height, bytesPerRow);
+    uint8_t *pixels = static_cast<uint8_t *>(calloc(height, bytesPerRow));
     if (!pixels) return nil;
 
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
@@ -219,10 +220,10 @@ static UIColor *BFDominantColorFromImage(UIImage *image) {
     CGContextRelease(context);
 
     const int binCount = 4096; // 16 bins per RGB channel.
-    double *weights = calloc(binCount, sizeof(double));
-    double *sumR = calloc(binCount, sizeof(double));
-    double *sumG = calloc(binCount, sizeof(double));
-    double *sumB = calloc(binCount, sizeof(double));
+    double *weights = static_cast<double *>(calloc(binCount, sizeof(double)));
+    double *sumR = static_cast<double *>(calloc(binCount, sizeof(double)));
+    double *sumG = static_cast<double *>(calloc(binCount, sizeof(double)));
+    double *sumB = static_cast<double *>(calloc(binCount, sizeof(double)));
     if (!weights || !sumR || !sumG || !sumB) {
         free(weights); free(sumR); free(sumG); free(sumB); free(pixels);
         return nil;

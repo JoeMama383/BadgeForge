@@ -41,6 +41,12 @@ for hook in [
 if source.count("%hook") != source.count("%end"):
     errors.append("Logos hook/end count mismatch")
 
+# Tweak.xm is preprocessed by Logos as Objective-C++, where void* does not
+# implicitly convert to typed pointers. Keep heap allocation sites explicit.
+raw_calloc_assignments = re.findall(r"(?:uint8_t|double)\s*\*\s*\w+\s*=\s*calloc\s*\(", source)
+if raw_calloc_assignments:
+    errors.append("Tweak.xm contains uncast calloc assignment(s) that fail under Objective-C++")
+
 prefs_text = (root / "badgeforgeprefs/Resources/Root.plist").read_text()
 for key in ["tweakEnabled", "badgeColorType", "badgeColor", "textColorType", "textColor",
             "borderEnabled", "borderWidth", "borderColorType", "borderColor", "Respring!"]:
