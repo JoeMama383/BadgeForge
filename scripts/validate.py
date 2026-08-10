@@ -103,13 +103,13 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.6" not in control:
-    errors.append("control version is not 1.0.6")
+if "Version: 1.0.7" not in control:
+    errors.append("control version is not 1.0.7")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.6</string>" not in info:
-    errors.append("preference bundle version is not 1.0.6")
-if "BadgeForge 1.0.6 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.6")
+if "<string>1.0.7</string>" not in info:
+    errors.append("preference bundle version is not 1.0.7")
+if "BadgeForge 1.0.7 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.7")
 
 for token in [
     "LCPParseColorString",
@@ -120,6 +120,17 @@ for token in [
 ]:
     if token not in source:
         errors.append(f"Tweak.xm missing v1.0.6 probe/static-color component: {token}")
+
+if "BFStringValue" in source:
+    errors.append("Tweak.xm still contains the unused BFStringValue helper that breaks -Werror builds")
+for token in [
+    "BFProbeJailbreakEnvironment",
+    "_dyld_image_count",
+    "libellekit.dylib",
+    "loaded jailbreak/hook images=",
+]:
+    if token not in source:
+        errors.append(f"Tweak.xm missing v1.0.7 Dopamine/runtime probe component: {token}")
 
 if errors:
     print("\nFAILED")

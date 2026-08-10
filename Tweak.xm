@@ -10,6 +10,7 @@
 #import <unistd.h>
 #import <sys/stat.h>
 #import <stdarg.h>
+#import <mach-o/dyld.h>
 
 // BadgeForge is intentionally implemented without private SpringBoard headers.
 // The only private surface we hook is SBIconBadgeView, and all other private
@@ -223,6 +224,40 @@ static void BFProbeDiscoverBadgeClasses(void) {
     free(classes);
 }
 
+static void BFProbeJailbreakEnvironment(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray<NSString *> *paths = @[
+        @"/var/jb",
+        @"/var/jb/usr/lib/libellekit.dylib",
+        @"/var/jb/usr/lib/libsubstrate.dylib",
+        @"/var/jb/Library/MobileSubstrate/DynamicLibraries",
+        @"/var/jb/usr/lib/libcolorpicker.dylib"
+    ];
+    NSMutableArray<NSString *> *states = [NSMutableArray array];
+    for (NSString *path in paths) {
+        BOOL isDirectory = NO;
+        BOOL exists = [fm fileExistsAtPath:path isDirectory:&isDirectory];
+        [states addObject:[NSString stringWithFormat:@"%@=%d%s", path, exists, (exists && isDirectory) ? "(dir)" : ""]];
+    }
+    BFProbeLog(@"jailbreak env uid=%u euid=%u rootlessPaths=%@", getuid(), geteuid(), states);
+
+    NSMutableArray<NSString *> *interestingImages = [NSMutableArray array];
+    uint32_t imageCount = _dyld_image_count();
+    for (uint32_t i = 0; i < imageCount; i++) {
+        const char *cname = _dyld_get_image_name(i);
+        if (!cname) continue;
+        NSString *name = [NSString stringWithUTF8String:cname];
+        NSString *lower = name.lowercaseString;
+        if ([lower containsString:@"ellekit"] || [lower containsString:@"substrate"] ||
+            [lower containsString:@"dopamine"] || [lower containsString:@"nathan"] ||
+            [lower containsString:@"hooker"] || [lower containsString:@"badgeforge"] ||
+            [lower containsString:@"colorpicker"]) {
+            [interestingImages addObject:name];
+        }
+    }
+    BFProbeLog(@"loaded jailbreak/hook images=%@", interestingImages);
+}
+
 #pragma mark - Preferences
 
 static id BFPreferenceValue(NSString *key) {
@@ -245,11 +280,6 @@ static NSInteger BFIntegerValue(NSString *key, NSInteger fallback) {
 static CGFloat BFFloatValue(NSString *key, CGFloat fallback) {
     id value = BFPreferenceValue(key);
     return value ? (CGFloat)[value doubleValue] : fallback;
-}
-
-static NSString *BFStringValue(NSString *key, NSString *fallback) {
-    id value = BFPreferenceValue(key);
-    return [value isKindOfClass:[NSString class]] ? value : fallback;
 }
 
 static void BFLoadPreferences(void) {
@@ -1008,7 +1038,8 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
-        BFProbeLog(@"\n\n===== BadgeForge 1.0.6 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.7 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeJailbreakEnvironment();
         BFProbeDiscoverBadgeClasses();
         BFLoadColorPickerParser();
         BFLiveBadgeViews = [NSHashTable weakObjectsHashTable];

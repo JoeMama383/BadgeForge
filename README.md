@@ -33,6 +33,12 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.7
+
+- Fix the v1.0.6 CI failure by removing an unused static preference helper that Clang promoted to an error under `-Werror`.
+- Keep the iOS 17 badge probe intact and add runtime jailbreak/injection diagnostics for Dopamine/ElleKit-style environments, including rootless path presence and loaded hook-library image names.
+- No badge painting behavior is intentionally changed in this diagnostic build.
+
 ## v1.0.5
 
 - Install Theos' patched iOS SDK in GitHub Actions so private frameworks such as Preferences are linkable.
