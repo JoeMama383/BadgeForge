@@ -103,13 +103,13 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.7" not in control:
-    errors.append("control version is not 1.0.7")
+if "Version: 1.0.8" not in control:
+    errors.append("control version is not 1.0.8")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.7</string>" not in info:
-    errors.append("preference bundle version is not 1.0.7")
-if "BadgeForge 1.0.7 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.7")
+if "<string>1.0.8</string>" not in info:
+    errors.append("preference bundle version is not 1.0.8")
+if "BadgeForge 1.0.8 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.8")
 
 for token in [
     "LCPParseColorString",
@@ -130,7 +130,25 @@ for token in [
     "loaded jailbreak/hook images=",
 ]:
     if token not in source:
-        errors.append(f"Tweak.xm missing v1.0.7 Dopamine/runtime probe component: {token}")
+        errors.append(f"Tweak.xm missing v1.0.8 Dopamine/runtime probe component: {token}")
+
+
+for token in [
+    "BFColorPreferenceValue",
+    "/var/jb/var/mobile/Library/Preferences/com.joemama383.badgeforge.plist",
+    "source=direct-plist",
+]:
+    if token not in source:
+        errors.append(f"Tweak.xm missing v1.0.8 direct color preference bridge: {token}")
+
+for token in [
+    "readPreferenceValue:(PSSpecifier *)specifier",
+    "setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier",
+    "BFMirrorPreferenceToDirectPlist",
+    "CFPreferencesSetAppValue",
+]:
+    if token not in prefs_controller:
+        errors.append(f"preference controller missing v1.0.8 persistence bridge: {token}")
 
 if errors:
     print("\nFAILED")

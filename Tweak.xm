@@ -260,11 +260,52 @@ static void BFProbeJailbreakEnvironment(void) {
 
 #pragma mark - Preferences
 
-static id BFPreferenceValue(NSString *key) {
+static id BFCFPreferenceValue(NSString *key) {
     CFPreferencesAppSynchronize((__bridge CFStringRef)BFPreferencesDomain);
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
                                                         (__bridge CFStringRef)BFPreferencesDomain);
     return CFBridgingRelease(value);
+}
+
+static id BFDirectPreferenceValue(NSString *key, NSString **sourcePath) {
+    // libcolorpicker is legacy code and on Dopamine/ElleKit can persist its
+    // color strings by writing the preference plist directly instead of
+    // going through cfprefsd. Read both rootless and canonical locations so
+    // those writes are visible to SpringBoard immediately.
+    NSArray<NSString *> *paths = @[
+        @"/var/jb/var/mobile/Library/Preferences/com.joemama383.badgeforge.plist",
+        @"/var/mobile/Library/Preferences/com.joemama383.badgeforge.plist"
+    ];
+    for (NSString *path in paths) {
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:path];
+        id value = [dict isKindOfClass:[NSDictionary class]] ? dict[key] : nil;
+        if (value) {
+            if (sourcePath) *sourcePath = path;
+            return value;
+        }
+    }
+    return nil;
+}
+
+static id BFPreferenceValue(NSString *key) {
+    return BFCFPreferenceValue(key);
+}
+
+static id BFColorPreferenceValue(NSString *key, NSString *fallback) {
+    NSString *path = nil;
+    id fileValue = BFDirectPreferenceValue(key, &path);
+    if (fileValue) {
+        BFProbeLog(@"color pref %@ source=direct-plist path=%@ value=%@", key, path, BFProbeObjectDescription(fileValue));
+        return fileValue;
+    }
+
+    id cfValue = BFCFPreferenceValue(key);
+    if (cfValue) {
+        BFProbeLog(@"color pref %@ source=CFPreferences value=%@", key, BFProbeObjectDescription(cfValue));
+        return cfValue;
+    }
+    BFProbeLog(@"color pref %@ source=fallback value=%@", key, fallback);
+    return fallback;
 }
 
 static BOOL BFBoolValue(NSString *key, BOOL fallback) {
@@ -289,9 +330,9 @@ static void BFLoadPreferences(void) {
     BFBorderEnabled = BFBoolValue(@"borderEnabled", YES);
     BFBorderWidth = MAX(0.0, MIN(8.0, BFFloatValue(@"borderWidth", 1.0)));
     BFBorderColorType = BFIntegerValue(@"borderColorType", 2);
-    BFBadgeColorRaw = BFPreferenceValue(@"badgeColor") ?: @"#FF0000";
-    BFTextColorRaw = BFPreferenceValue(@"textColor") ?: @"#FFFFFF";
-    BFBorderColorRaw = BFPreferenceValue(@"borderColor") ?: @"#FFFFFF";
+    BFBadgeColorRaw = BFColorPreferenceValue(@"badgeColor", @"#FF0000");
+    BFTextColorRaw = BFColorPreferenceValue(@"textColor", @"#FFFFFF");
+    BFBorderColorRaw = BFColorPreferenceValue(@"borderColor", @"#FFFFFF");
     BFProbeLog(@"prefs enabled=%d badgeType=%ld textType=%ld borderEnabled=%d borderWidth=%.3f borderType=%ld badgeRaw=%@ textRaw=%@ borderRaw=%@",
                BFEnabled, (long)BFBadgeColorType, (long)BFTextColorType, BFBorderEnabled, BFBorderWidth, (long)BFBorderColorType,
                BFProbeObjectDescription(BFBadgeColorRaw), BFProbeObjectDescription(BFTextColorRaw), BFProbeObjectDescription(BFBorderColorRaw));
@@ -1038,7 +1079,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
-        BFProbeLog(@"\n\n===== BadgeForge 1.0.7 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.8 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
         BFProbeJailbreakEnvironment();
         BFProbeDiscoverBadgeClasses();
         BFLoadColorPickerParser();

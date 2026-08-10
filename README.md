@@ -33,11 +33,18 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.8
+
+- Bridge libcolorpicker's legacy direct-plist persistence to SpringBoard on Dopamine/ElleKit so static badge, text, and border colors are actually read after selection.
+- Add top-level `defaults`, `key`, and `default` metadata to all three color-picker specifiers while preserving the existing libcolorpicker UI.
+- Preference writes now mirror to both CFPreferences and `/var/mobile/Library/Preferences/com.joemama383.badgeforge.plist`, then post the existing Darwin refresh notification.
+- Keep the v1.0.7 runtime probe enabled so the next on-device log identifies whether each color came from the direct plist, CFPreferences, or a fallback.
+
 ## v1.0.7
 
 - Fix the v1.0.6 CI failure by removing an unused static preference helper that Clang promoted to an error under `-Werror`.
 - Keep the iOS 17 badge probe intact and add runtime jailbreak/injection diagnostics for Dopamine/ElleKit-style environments, including rootless path presence and loaded hook-library image names.
-- No badge painting behavior is intentionally changed in this diagnostic build.
+- No badge painting behavior was intentionally changed in this diagnostic build.
 
 ## v1.0.5
 

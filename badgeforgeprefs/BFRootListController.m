@@ -5,6 +5,34 @@
 
 #define BFRespringNotification CFSTR("com.joemama383.badgeforge.respring")
 
+#define BFPreferencesDomain @"com.joemama383.badgeforge"
+#define BFSettingsChangedNotification CFSTR("com.joemama383.badgeforge.settingschanged")
+
+static NSString *BFPreferencePlistPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences/com.joemama383.badgeforge.plist"];
+}
+
+static BOOL BFIsColorPreferenceKey(NSString *key) {
+    return [key isEqualToString:@"badgeColor"] ||
+           [key isEqualToString:@"textColor"] ||
+           [key isEqualToString:@"borderColor"];
+}
+
+static void BFMirrorPreferenceToDirectPlist(NSString *key, id value) {
+    if (!key || !value) return;
+    NSString *path = BFPreferencePlistPath();
+    NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:path];
+    if (!prefs) prefs = [NSMutableDictionary dictionary];
+    prefs[key] = value;
+    [prefs writeToFile:path atomically:YES];
+}
+
+static void BFPostSettingsChanged(void) {
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         BFSettingsChangedNotification,
+                                         NULL, NULL, YES);
+}
+
 static void BFEnsureColorPickerLoaded(void) {
     if (NSClassFromString(@"PFSimpleLiteColorCell")) return;
 
@@ -45,6 +73,45 @@ static void BFEnsureColorPickerLoaded(void) {
         _specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
     }
     return _specifiers;
+}
+
+- (id)readPreferenceValue:(PSSpecifier *)specifier {
+    NSString *key = [specifier propertyForKey:@"key"];
+    NSString *domain = [specifier propertyForKey:@"defaults"] ?: BFPreferencesDomain;
+    id fallback = [specifier propertyForKey:@"default"];
+    if (!key) return fallback;
+
+    // Only legacy color cells need the direct-plist bridge. Keep ordinary
+    // PreferenceLoader controls on CFPreferences so a stale legacy plist can
+    // never override switches/segments/text fields.
+    if (BFIsColorPreferenceKey(key)) {
+        NSDictionary *direct = [NSDictionary dictionaryWithContentsOfFile:BFPreferencePlistPath()];
+        id directValue = direct[key];
+        if (directValue) return directValue;
+    }
+
+    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
+    CFPropertyListRef copied = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                         (__bridge CFStringRef)domain);
+    return copied ? CFBridgingRelease(copied) : fallback;
+}
+
+- (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
+    NSString *key = [specifier propertyForKey:@"key"];
+    NSString *domain = [specifier propertyForKey:@"defaults"] ?: BFPreferencesDomain;
+    if (!key || !value) {
+        [super setPreferenceValue:value specifier:specifier];
+        return;
+    }
+
+    // Write both persistence paths. This keeps standard PreferenceLoader
+    // controls, libcolorpicker, and SpringBoard in agreement on Dopamine.
+    CFPreferencesSetAppValue((__bridge CFStringRef)key,
+                             (__bridge CFPropertyListRef)value,
+                             (__bridge CFStringRef)domain);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
+    if (BFIsColorPreferenceKey(key)) BFMirrorPreferenceToDirectPlist(key, value);
+    BFPostSettingsChanged();
 }
 
 - (void)respring {
