@@ -54,6 +54,9 @@ static NSCache *BFAdaptiveColorCache;
 @interface SBIconBadgeView : UIView
 @end
 
+@interface SBIconView : UIView
+@end
+
 static const void *BFIconKey = &BFIconKey;
 static const void *BFSnapshotKey = &BFSnapshotKey;
 static const void *BFAppliedKey = &BFAppliedKey;
@@ -278,6 +281,7 @@ static UIColor *BFAverageColorFromImage(UIImage *image) {
 typedef struct {
     CGSize size;
     CGFloat scale;
+    CGFloat continuousCornerRadius;
 } BFIconImageInfo;
 
 static id BFEffectiveIcon(id icon) {
@@ -393,20 +397,65 @@ static UIImage *BFGeneratedImageForIcon(id icon) {
     SEL selector = NSSelectorFromString(@"generateIconImageWithInfo:");
     if (![icon respondsToSelector:selector]) return nil;
 
+    // SBIconImageInfo is three CGFloat-sized fields on modern iOS.  The previous
+    // BadgeForge build omitted continuousCornerRadius, so the private method was
+    // called with the wrong ABI/struct size and commonly returned no usable icon.
     BFIconImageInfo info;
     info.size = CGSizeMake(60.0, 60.0);
     info.scale = UIScreen.mainScreen.scale;
+    info.continuousCornerRadius = 12.0;
 
     typedef UIImage *(*BFImageMessage)(id, SEL, BFIconImageInfo);
-    UIImage *image = ((BFImageMessage)objc_msgSend)(icon, selector, info);
+    UIImage *image = nil;
+    @try {
+        image = ((BFImageMessage)objc_msgSend)(icon, selector, info);
+    } @catch (__unused NSException *exception) {
+        image = nil;
+    }
     return (image && image.CGImage) ? image : nil;
 }
 
 static UIImage *BFImageForIcon(id icon) {
-    NSString *bundleIdentifier = BFBundleIdentifierForIcon(icon);
-    UIImage *image = BFImageForBundleIdentifier(bundleIdentifier);
+    // Prefer SpringBoard's own SBIcon renderer.  It is the same icon object that
+    // owns this badge and therefore also works for themed/alternate app icons.
+    UIImage *image = BFGeneratedImageForIcon(icon);
     if (image) return image;
-    return BFGeneratedImageForIcon(icon);
+
+    // Keep the UIKit bundle-id renderer as a secondary path for application icons
+    // whose SBIcon renderer is temporarily unavailable during hydration.
+    NSString *bundleIdentifier = BFBundleIdentifierForIcon(icon);
+    return BFImageForBundleIdentifier(bundleIdentifier);
+}
+
+static id BFResolveIconForBadge(id badge) {
+    if (!badge) return nil;
+
+    id icon = objc_getAssociatedObject(badge, BFIconKey);
+    if (icon) return icon;
+
+    // Some iOS 17 badge refresh paths call layout/draw without re-running the
+    // configureForIcon: hook. Recover the owning icon from the badge/icon-view
+    // hierarchy instead of silently falling back to stock red.
+    NSArray<NSString *> *selectors = @[ @"icon", @"representedIcon" ];
+    for (NSString *selectorName in selectors) {
+        icon = BFSendObject0(badge, selectorName);
+        if (icon) break;
+    }
+    if (!icon) icon = BFIvarObject(badge, "_icon");
+    if (!icon) icon = BFIvarObject(badge, "_representedIcon");
+
+    UIView *view = [badge isKindOfClass:[UIView class]] ? (UIView *)badge : nil;
+    for (NSUInteger depth = 0; !icon && view && depth < 10; depth++, view = view.superview) {
+        for (NSString *selectorName in selectors) {
+            icon = BFSendObject0(view, selectorName);
+            if (icon) break;
+        }
+        if (!icon) icon = BFIvarObject(view, "_icon");
+        if (!icon) icon = BFIvarObject(view, "_representedIcon");
+    }
+
+    if (icon) objc_setAssociatedObject(badge, BFIconKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return icon;
 }
 
 static UIColor *BFAdaptiveColorForIcon(id originalIcon) {
@@ -548,7 +597,7 @@ static void BFApplyBadge(id badge) {
     UIView *textView = BFTextView(badge);
     if (!backgroundView || !textView) return;
 
-    id icon = objc_getAssociatedObject(badge, BFIconKey);
+    id icon = BFResolveIconForBadge(badge);
     BFPalette *palette = BFPaletteForIcon(icon);
 
     if ([backgroundView isKindOfClass:[UIImageView class]]) {
@@ -610,6 +659,22 @@ static void BFPerformRespring(CFNotificationCenterRef center, void *observer, CF
     });
 }
 
+static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
+    if (!root || !icon || depth > 5) return;
+    Class badgeClass = NSClassFromString(@"SBIconBadgeView");
+    if (!badgeClass) return;
+
+    for (UIView *subview in root.subviews) {
+        if ([subview isKindOfClass:badgeClass]) {
+            objc_setAssociatedObject(subview, BFIconKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            BFRegisterBadge(subview);
+            BFApplyBadge(subview);
+            continue;
+        }
+        BFBindBadgeDescendants(subview, icon, depth + 1);
+    }
+}
+
 #pragma mark - SBIconBadgeView
 
 %hook SBIconBadgeView
@@ -654,6 +719,26 @@ static void BFPerformRespring(CFNotificationCenterRef center, void *observer, CF
     if (self.window) {
         BFRegisterBadge(self);
         BFApplyBadge(self);
+    }
+}
+
+%end
+
+%hook SBIconView
+
+- (void)layoutSubviews {
+    %orig;
+    id icon = BFSendObject0(self, @"icon");
+    if (!icon) icon = BFIvarObject(self, "_icon");
+    if (!icon) return;
+
+    id badge = BFIvarObject(self, "_badgeView");
+    if ([badge isKindOfClass:NSClassFromString(@"SBIconBadgeView")]) {
+        objc_setAssociatedObject(badge, BFIconKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        BFRegisterBadge(badge);
+        BFApplyBadge(badge);
+    } else {
+        BFBindBadgeDescendants(self, icon, 0);
     }
 }
 
