@@ -5,6 +5,11 @@
 #import <objc/message.h>
 #import <math.h>
 #import <stdlib.h>
+#import <dlfcn.h>
+#import <fcntl.h>
+#import <unistd.h>
+#import <sys/stat.h>
+#import <stdarg.h>
 
 // BadgeForge is intentionally implemented without private SpringBoard headers.
 // The only private surface we hook is SBIconBadgeView, and all other private
@@ -20,9 +25,16 @@ static NSInteger BFTextColorType = 1;    // 0 adaptive, 1 static
 static BOOL BFBorderEnabled = YES;
 static CGFloat BFBorderWidth = 1.0;
 static NSInteger BFBorderColorType = 2;  // 0 adaptive, 1 match text, 2 static
-static NSString *BFBadgeColorHex = @"#FF0000";
-static NSString *BFTextColorHex = @"#FFFFFF";
-static NSString *BFBorderColorHex = @"#FFFFFF";
+static id BFBadgeColorRaw = nil;
+static id BFTextColorRaw = nil;
+static id BFBorderColorRaw = nil;
+
+static const char *BFProbePath = "/var/mobile/BadgeForgeProbe.log";
+static const NSUInteger BFProbeBadgeLimit = 12;
+static NSUInteger BFProbeBadgeCount = 0;
+static void *BFColorPickerHandle = NULL;
+typedef UIColor *(*BFLCPParseColorStringFunction)(NSString *, NSString *);
+static BFLCPParseColorStringFunction BFLCPParseColorString = NULL;
 
 static NSHashTable *BFLiveBadgeViews;
 static NSCache *BFAdaptiveColorCache;
@@ -60,6 +72,156 @@ static NSCache *BFAdaptiveColorCache;
 static const void *BFIconKey = &BFIconKey;
 static const void *BFSnapshotKey = &BFSnapshotKey;
 static const void *BFAppliedKey = &BFAppliedKey;
+static const void *BFProbeDumpedKey = &BFProbeDumpedKey;
+static const void *BFProbeApplyCountKey = &BFProbeApplyCountKey;
+
+#pragma mark - Probe logging
+
+static NSString *BFProbeObjectDescription(id value) {
+    if (!value) return @"<nil>";
+    NSString *desc = nil;
+    @try { desc = [value description]; } @catch (__unused NSException *exception) { desc = @"<description threw>"; }
+    return [NSString stringWithFormat:@"%@(%@)", NSStringFromClass([value class]), desc ?: @"<nil>"];
+}
+
+static NSString *BFProbeColorDescription(UIColor *color) {
+    if (!color) return @"<nil>";
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if ([color getRed:&r green:&g blue:&b alpha:&a]) {
+        return [NSString stringWithFormat:@"rgba(%.3f,%.3f,%.3f,%.3f)", r, g, b, a];
+    }
+    CGFloat w = 0;
+    if ([color getWhite:&w alpha:&a]) {
+        return [NSString stringWithFormat:@"white(%.3f,%.3f)", w, a];
+    }
+    return [color description];
+}
+
+static NSString *BFProbeCGColorDescription(CGColorRef color) {
+    if (!color) return @"<nil>";
+    return BFProbeColorDescription([UIColor colorWithCGColor:color]);
+}
+
+static void BFProbeLog(NSString *format, ...) {
+    if (!format) return;
+    struct stat info;
+    if (stat(BFProbePath, &info) == 0 && info.st_size > (1024 * 1024)) unlink(BFProbePath);
+
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    if (!message) return;
+
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], message];
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    int fd = open(BFProbePath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        if (data.length) (void)write(fd, data.bytes, data.length);
+        close(fd);
+    }
+}
+
+static BOOL BFProbeRelevantName(NSString *name) {
+    if (!name.length) return NO;
+    NSString *lower = name.lowercaseString;
+    NSArray<NSString *> *tokens = @[ @"badge", @"background", @"foreground", @"color", @"fill", @"text", @"label", @"image", @"tint", @"layer", @"icon", @"material" ];
+    for (NSString *token in tokens) if ([lower containsString:token]) return YES;
+    return NO;
+}
+
+static void BFProbeDumpRelevantIvars(id object) {
+    if (!object) return;
+    for (Class cls = object_getClass(object); cls && cls != [NSObject class]; cls = class_getSuperclass(cls)) {
+        unsigned int count = 0;
+        Ivar *ivars = class_copyIvarList(cls, &count);
+        for (unsigned int i = 0; i < count; i++) {
+            Ivar ivar = ivars[i];
+            NSString *name = [NSString stringWithUTF8String:ivar_getName(ivar) ?: ""];
+            if (!BFProbeRelevantName(name)) continue;
+            const char *type = ivar_getTypeEncoding(ivar);
+            if (type && type[0] == '@') {
+                id value = nil;
+                @try { value = object_getIvar(object, ivar); } @catch (__unused NSException *exception) {}
+                BFProbeLog(@"ivar %@.%@ type=%s value=%@", NSStringFromClass(cls), name, type, BFProbeObjectDescription(value));
+            } else {
+                BFProbeLog(@"ivar %@.%@ type=%s", NSStringFromClass(cls), name, type ?: "?");
+            }
+        }
+        free(ivars);
+    }
+}
+
+static void BFProbeDumpRelevantMethods(Class cls) {
+    NSUInteger emitted = 0;
+    for (Class cur = cls; cur && cur != [UIView class] && emitted < 100; cur = class_getSuperclass(cur)) {
+        unsigned int count = 0;
+        Method *methods = class_copyMethodList(cur, &count);
+        for (unsigned int i = 0; i < count && emitted < 100; i++) {
+            NSString *name = NSStringFromSelector(method_getName(methods[i]));
+            if (!BFProbeRelevantName(name) && ![name.lowercaseString containsString:@"configure"] && ![name.lowercaseString containsString:@"layout"] && ![name.lowercaseString containsString:@"update"]) continue;
+            BFProbeLog(@"method %@ -%@", NSStringFromClass(cur), name);
+            emitted++;
+        }
+        free(methods);
+    }
+}
+
+static void BFProbeDumpLayer(CALayer *layer, NSUInteger depth) {
+    if (!layer || depth > 4) return;
+    NSMutableString *indent = [NSMutableString string];
+    for (NSUInteger i = 0; i < depth; i++) [indent appendString:@"  "];
+    BFProbeLog(@"%@layer %@ %p frame=%@ bg=%@ border=%@/%.2f corner=%.2f opacity=%.2f hidden=%d contents=%p",
+               indent, NSStringFromClass([layer class]), layer, NSStringFromCGRect(layer.frame),
+               BFProbeCGColorDescription(layer.backgroundColor), BFProbeCGColorDescription(layer.borderColor), layer.borderWidth,
+               layer.cornerRadius, layer.opacity, layer.hidden, (__bridge void *)layer.contents);
+    if ([layer isKindOfClass:[CAShapeLayer class]]) {
+        CAShapeLayer *shape = (CAShapeLayer *)layer;
+        BFProbeLog(@"%@  shape fill=%@ stroke=%@ lineWidth=%.2f path=%p", indent,
+                   BFProbeCGColorDescription(shape.fillColor), BFProbeCGColorDescription(shape.strokeColor), shape.lineWidth, (void *)shape.path);
+    }
+    if ([layer isKindOfClass:[CAGradientLayer class]]) {
+        CAGradientLayer *gradient = (CAGradientLayer *)layer;
+        BFProbeLog(@"%@  gradient colors=%@", indent, gradient.colors);
+    }
+    for (CALayer *child in [layer.sublayers copy]) BFProbeDumpLayer(child, depth + 1);
+}
+
+static void BFProbeDumpView(UIView *view, NSUInteger depth) {
+    if (!view || depth > 4) return;
+    NSMutableString *indent = [NSMutableString string];
+    for (NSUInteger i = 0; i < depth; i++) [indent appendString:@"  "];
+    BFProbeLog(@"%@view %@ %p frame=%@ alpha=%.2f hidden=%d bg=%@ tint=%@",
+               indent, NSStringFromClass([view class]), view, NSStringFromCGRect(view.frame), view.alpha, view.hidden,
+               BFProbeColorDescription(view.backgroundColor), BFProbeColorDescription(view.tintColor));
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        BFProbeLog(@"%@  label text=%@ color=%@", indent, label.text, BFProbeColorDescription(label.textColor));
+    }
+    if ([view isKindOfClass:[UIImageView class]]) {
+        UIImageView *iv = (UIImageView *)view;
+        BFProbeLog(@"%@  image=%p size=%@ mode=%ld tint=%@", indent, iv.image, NSStringFromCGSize(iv.image.size),
+                   (long)iv.image.renderingMode, BFProbeColorDescription(iv.tintColor));
+    }
+    BFProbeDumpLayer(view.layer, depth);
+    for (UIView *child in view.subviews) BFProbeDumpView(child, depth + 1);
+}
+
+static void BFProbeDiscoverBadgeClasses(void) {
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return;
+    Class *classes = static_cast<Class *>(calloc((size_t)count, sizeof(Class)));
+    if (!classes) return;
+    count = objc_getClassList(classes, count);
+    for (int i = 0; i < count; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        NSString *lower = name.lowercaseString;
+        if ([lower containsString:@"badge"] && ([lower containsString:@"icon"] || [lower containsString:@"springboard"])) {
+            BFProbeLog(@"runtime badge class: %@ superclass=%@", name, NSStringFromClass(class_getSuperclass(classes[i])));
+        }
+    }
+    free(classes);
+}
 
 #pragma mark - Preferences
 
@@ -97,9 +259,12 @@ static void BFLoadPreferences(void) {
     BFBorderEnabled = BFBoolValue(@"borderEnabled", YES);
     BFBorderWidth = MAX(0.0, MIN(8.0, BFFloatValue(@"borderWidth", 1.0)));
     BFBorderColorType = BFIntegerValue(@"borderColorType", 2);
-    BFBadgeColorHex = BFStringValue(@"badgeColor", @"#FF0000");
-    BFTextColorHex = BFStringValue(@"textColor", @"#FFFFFF");
-    BFBorderColorHex = BFStringValue(@"borderColor", @"#FFFFFF");
+    BFBadgeColorRaw = BFPreferenceValue(@"badgeColor") ?: @"#FF0000";
+    BFTextColorRaw = BFPreferenceValue(@"textColor") ?: @"#FFFFFF";
+    BFBorderColorRaw = BFPreferenceValue(@"borderColor") ?: @"#FFFFFF";
+    BFProbeLog(@"prefs enabled=%d badgeType=%ld textType=%ld borderEnabled=%d borderWidth=%.3f borderType=%ld badgeRaw=%@ textRaw=%@ borderRaw=%@",
+               BFEnabled, (long)BFBadgeColorType, (long)BFTextColorType, BFBorderEnabled, BFBorderWidth, (long)BFBorderColorType,
+               BFProbeObjectDescription(BFBadgeColorRaw), BFProbeObjectDescription(BFTextColorRaw), BFProbeObjectDescription(BFBorderColorRaw));
 }
 
 #pragma mark - Safe private API helpers
@@ -160,6 +325,40 @@ static UIColor *BFColorFromHex(NSString *string, UIColor *fallback) {
         a = 1.0;
     }
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
+}
+
+static void BFLoadColorPickerParser(void) {
+    if (BFLCPParseColorString) return;
+    const char *paths[] = { "/var/jb/usr/lib/libcolorpicker.dylib", "/usr/lib/libcolorpicker.dylib" };
+    for (NSUInteger i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        void *handle = dlopen(paths[i], RTLD_NOW | RTLD_GLOBAL);
+        if (!handle) continue;
+        void *symbol = dlsym(handle, "LCPParseColorString");
+        if (symbol) {
+            BFColorPickerHandle = handle;
+            BFLCPParseColorString = reinterpret_cast<BFLCPParseColorStringFunction>(symbol);
+            BFProbeLog(@"libcolorpicker parser loaded from %s symbol=%p", paths[i], symbol);
+            return;
+        }
+    }
+    BFProbeLog(@"libcolorpicker parser unavailable");
+}
+
+static UIColor *BFColorFromPickerValue(id raw, NSString *fallbackString, UIColor *fallbackColor) {
+    if ([raw isKindOfClass:[UIColor class]]) return (UIColor *)raw;
+    NSString *value = [raw isKindOfClass:[NSString class]] ? (NSString *)raw : nil;
+    BFLoadColorPickerParser();
+    if (value && BFLCPParseColorString) {
+        UIColor *parsed = nil;
+        @try { parsed = BFLCPParseColorString(value, fallbackString); } @catch (__unused NSException *exception) {}
+        if ([parsed isKindOfClass:[UIColor class]]) {
+            BFProbeLog(@"picker parse raw=%@ fallback=%@ -> %@", value, fallbackString, BFProbeColorDescription(parsed));
+            return parsed;
+        }
+    }
+    UIColor *fallbackParsed = BFColorFromHex(value ?: fallbackString, fallbackColor);
+    BFProbeLog(@"picker fallback parse raw=%@ -> %@", BFProbeObjectDescription(raw), BFProbeColorDescription(fallbackParsed));
+    return fallbackParsed;
 }
 
 static CGFloat BFLinearChannel(CGFloat channel) {
@@ -375,11 +574,12 @@ static UIImage *BFImageForBundleIdentifier(NSString *bundleIdentifier) {
     // This UIKit private entry point remains used by modern jailbreak tooling and
     // avoids depending on SBIcon's older generateIconImageWithInfo: implementation.
     SEL selector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    BFProbeLog(@"bundle image request bundle=%@ format=%ld scale=%.2f selector1=%d", bundleIdentifier, (long)format, scale, [imageClass respondsToSelector:selector]);
     if ([imageClass respondsToSelector:selector]) {
         typedef UIImage *(*BFBundleImageMessage)(id, SEL, NSString *, NSInteger, CGFloat);
         UIImage *image = ((BFBundleImageMessage)objc_msgSend)(imageClass, selector,
                                                               bundleIdentifier, format, scale);
-        if (image && image.CGImage) return image;
+        if (image && image.CGImage) { BFProbeLog(@"bundle image selector1 success size=%@", NSStringFromCGSize(image.size)); return image; }
     }
 
     selector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:roleIdentifier:format:scale:");
@@ -387,15 +587,16 @@ static UIImage *BFImageForBundleIdentifier(NSString *bundleIdentifier) {
         typedef UIImage *(*BFRoleBundleImageMessage)(id, SEL, NSString *, id, NSInteger, CGFloat);
         UIImage *image = ((BFRoleBundleImageMessage)objc_msgSend)(imageClass, selector,
                                                                   bundleIdentifier, nil, format, scale);
-        if (image && image.CGImage) return image;
+        if (image && image.CGImage) { BFProbeLog(@"bundle image selector2 success size=%@", NSStringFromCGSize(image.size)); return image; }
     }
+    BFProbeLog(@"bundle image failed bundle=%@", bundleIdentifier);
     return nil;
 }
 
 static UIImage *BFGeneratedImageForIcon(id icon) {
     if (!icon) return nil;
     SEL selector = NSSelectorFromString(@"generateIconImageWithInfo:");
-    if (![icon respondsToSelector:selector]) return nil;
+    if (![icon respondsToSelector:selector]) { BFProbeLog(@"icon %@ does not respond generateIconImageWithInfo:", NSStringFromClass([icon class])); return nil; }
 
     // SBIconImageInfo is three CGFloat-sized fields on modern iOS.  The previous
     // BadgeForge build omitted continuousCornerRadius, so the private method was
@@ -412,6 +613,7 @@ static UIImage *BFGeneratedImageForIcon(id icon) {
     } @catch (__unused NSException *exception) {
         image = nil;
     }
+    BFProbeLog(@"generated icon image class=%@ result=%p size=%@", NSStringFromClass([icon class]), image, NSStringFromCGSize(image.size));
     return (image && image.CGImage) ? image : nil;
 }
 
@@ -466,19 +668,22 @@ static UIColor *BFAdaptiveColorForIcon(id originalIcon) {
     UIColor *cached = [BFAdaptiveColorCache objectForKey:cacheKey];
     if (cached) return cached;
 
+    NSString *bundleID = BFBundleIdentifierForIcon(icon);
+    BFProbeLog(@"adaptive icon=%p class=%@ bundle=%@ cacheKey=%@", icon, NSStringFromClass([icon class]), bundleID, cacheKey);
     UIImage *image = BFImageForIcon(icon);
     UIColor *average = BFAverageColorFromImage(image);
+    BFProbeLog(@"adaptive image=%p size=%@ average=%@", image, NSStringFromCGSize(image.size), BFProbeColorDescription(average));
     if (average && cacheKey) [BFAdaptiveColorCache setObject:average forKey:cacheKey];
     return average;
 }
 static BFPalette *BFPaletteForIcon(id icon) {
     UIColor *adaptiveBackground = BFAdaptiveColorForIcon(icon) ?: [UIColor systemRedColor];
     UIColor *background = BFBadgeColorType == 1
-        ? BFColorFromHex(BFBadgeColorHex, [UIColor systemRedColor])
+        ? BFColorFromPickerValue(BFBadgeColorRaw, @"#FF0000", [UIColor systemRedColor])
         : adaptiveBackground;
 
     UIColor *text = BFTextColorType == 1
-        ? BFColorFromHex(BFTextColorHex, UIColor.whiteColor)
+        ? BFColorFromPickerValue(BFTextColorRaw, @"#FFFFFF", UIColor.whiteColor)
         : BFReadableTextColor(background);
 
     UIColor *border;
@@ -487,7 +692,7 @@ static BFPalette *BFPaletteForIcon(id icon) {
             border = text;
             break;
         case 2:
-            border = BFColorFromHex(BFBorderColorHex, UIColor.whiteColor);
+            border = BFColorFromPickerValue(BFBorderColorRaw, @"#FFFFFF", UIColor.whiteColor);
             break;
         case 0:
         default:
@@ -500,6 +705,54 @@ static BFPalette *BFPaletteForIcon(id icon) {
     palette.textColor = text;
     palette.borderColor = border;
     return palette;
+}
+
+static UIView *BFBackgroundView(id badge);
+static UIView *BFTextView(id badge);
+
+static void BFProbeDumpBadge(id badge, id icon) {
+    if (!badge || [objc_getAssociatedObject(badge, BFProbeDumpedKey) boolValue]) return;
+    if (BFProbeBadgeCount >= BFProbeBadgeLimit) return;
+    BFProbeBadgeCount++;
+    objc_setAssociatedObject(badge, BFProbeDumpedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    BFProbeLog(@"===== BADGE SNAPSHOT %lu badge=%p class=%@ super=%@ icon=%p iconClass=%@ bundle=%@ =====",
+               (unsigned long)BFProbeBadgeCount, badge, NSStringFromClass([badge class]), NSStringFromClass(class_getSuperclass([badge class])),
+               icon, icon ? NSStringFromClass([icon class]) : @"<nil>", BFBundleIdentifierForIcon(icon));
+    BFProbeDumpRelevantMethods([badge class]);
+    BFProbeDumpRelevantIvars(badge);
+
+    UIView *view = [badge isKindOfClass:[UIView class]] ? (UIView *)badge : nil;
+    NSMutableArray *chain = [NSMutableArray array];
+    for (UIView *cur = view; cur && chain.count < 8; cur = cur.superview) [chain addObject:NSStringFromClass([cur class])];
+    BFProbeLog(@"superview chain=%@", chain);
+    BFProbeDumpView(view, 0);
+}
+
+static void BFProbePostApply(id badge, BFPalette *palette, UIView *backgroundView, UIView *textView) {
+    NSUInteger applyCount = [objc_getAssociatedObject(badge, BFProbeApplyCountKey) unsignedIntegerValue] + 1;
+    objc_setAssociatedObject(badge, BFProbeApplyCountKey, @(applyCount), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (applyCount > 3) return;
+    BFProbeLog(@"apply badge=%p bgView=%@ textView=%@ palette bg=%@ text=%@ border=%@ width=%.2f",
+               badge, NSStringFromClass([backgroundView class]), NSStringFromClass([textView class]),
+               BFProbeColorDescription(palette.backgroundColor), BFProbeColorDescription(palette.textColor),
+               BFProbeColorDescription(palette.borderColor), BFBorderEnabled ? BFBorderWidth : 0.0);
+    BFProbeLog(@"after-write bg.background=%@ bg.tint=%@ layer.bg=%@ layer.border=%@/%.2f text.background=%@ text.tint=%@",
+               BFProbeColorDescription(backgroundView.backgroundColor), BFProbeColorDescription(backgroundView.tintColor),
+               BFProbeCGColorDescription(backgroundView.layer.backgroundColor), BFProbeCGColorDescription(backgroundView.layer.borderColor), backgroundView.layer.borderWidth,
+               BFProbeColorDescription(textView.backgroundColor), BFProbeColorDescription(textView.tintColor));
+
+    __weak id weakBadge = badge;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        id strongBadge = weakBadge;
+        if (!strongBadge) return;
+        UIView *bg = BFBackgroundView(strongBadge);
+        UIView *txt = BFTextView(strongBadge);
+        BFProbeLog(@"after-80ms badge=%p bgClass=%@ bg.background=%@ bg.tint=%@ layer.bg=%@ layer.border=%@/%.2f textClass=%@ text.background=%@ text.tint=%@",
+                   strongBadge, NSStringFromClass([bg class]), BFProbeColorDescription(bg.backgroundColor), BFProbeColorDescription(bg.tintColor),
+                   BFProbeCGColorDescription(bg.layer.backgroundColor), BFProbeCGColorDescription(bg.layer.borderColor), bg.layer.borderWidth,
+                   NSStringFromClass([txt class]), BFProbeColorDescription(txt.backgroundColor), BFProbeColorDescription(txt.tintColor));
+    });
 }
 
 #pragma mark - Badge view theming
@@ -598,6 +851,7 @@ static void BFApplyBadge(id badge) {
     if (!backgroundView || !textView) return;
 
     id icon = BFResolveIconForBadge(badge);
+    BFProbeDumpBadge(badge, icon);
     BFPalette *palette = BFPaletteForIcon(icon);
 
     if ([backgroundView isKindOfClass:[UIImageView class]]) {
@@ -626,6 +880,7 @@ static void BFApplyBadge(id badge) {
     if (@available(iOS 13.0, *)) layer.cornerCurve = kCACornerCurveContinuous;
 
     objc_setAssociatedObject(badge, BFAppliedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    BFProbePostApply(badge, palette, backgroundView, textView);
 }
 
 static void BFRefreshAllBadges(void) {
@@ -640,6 +895,10 @@ static void BFSettingsChanged(CFNotificationCenterRef center, void *observer, CF
     dispatch_async(dispatch_get_main_queue(), ^{
         BFLoadPreferences();
         [BFAdaptiveColorCache removeAllObjects];
+        for (id badge in BFLiveBadgeViews.allObjects) {
+            objc_setAssociatedObject(badge, BFProbeApplyCountKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        BFProbeLog(@"settingschanged: cleared adaptive cache and per-badge apply probe counters");
         BFRefreshAllBadges();
     });
 }
@@ -680,6 +939,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %hook SBIconBadgeView
 
 - (void)configureForIcon:(id)icon infoProvider:(id)provider {
+    BFProbeLog(@"HOOK configureForIcon badge=%p class=%@ icon=%p iconClass=%@ provider=%@", self, NSStringFromClass([self class]), icon, NSStringFromClass([icon class]), NSStringFromClass([provider class]));
     BFRestoreBadge(self);
     %orig;
     objc_setAssociatedObject(self, BFIconKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -689,6 +949,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 }
 
 - (void)configureAnimatedForIcon:(id)icon infoProvider:(id)provider animator:(id)animator {
+    BFProbeLog(@"HOOK configureAnimated badge=%p class=%@ icon=%p iconClass=%@ provider=%@ animator=%@", self, NSStringFromClass([self class]), icon, NSStringFromClass([icon class]), NSStringFromClass([provider class]), NSStringFromClass([animator class]));
     BFRestoreBadge(self);
     %orig;
     objc_setAssociatedObject(self, BFIconKey, icon, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -747,6 +1008,9 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.6 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeDiscoverBadgeClasses();
+        BFLoadColorPickerParser();
         BFLiveBadgeViews = [NSHashTable weakObjectsHashTable];
         BFAdaptiveColorCache = [NSCache new];
         BFAdaptiveColorCache.countLimit = 256;
