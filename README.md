@@ -33,6 +33,13 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.10
+
+- Recolor iOS 17's stock badge background image itself in template mode, matching the mechanism used by Tinge instead of depending solely on an overlay layer. This keeps Adaptive/Static background colors visible for Home Screen badges as well as Dock badges.
+- Synchronize the fallback BadgeForge fill layer to SpringBoard's `badgeSize`/intrinsic size when `_backgroundView` temporarily reports 0x0, and resync after the private badge resize/layout steps.
+- Keep libcolorpicker's nested-only persistence contract, but refresh each color row's in-memory fallback from the value that libcolorpicker actually saved so the Settings swatch no longer visually snaps back to the factory fallback.
+- Preserve badge placement/stock dimensions, text coloring, border modes, and the runtime probe.
+
 ## v1.0.9
 
 - Restore the three libcolorpicker specifiers to the same nested-only persistence contract used by Tinge, removing the v1.0.8 PreferenceLoader bridge that caused selected swatches to reload as their defaults.

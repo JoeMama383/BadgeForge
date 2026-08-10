@@ -103,13 +103,13 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.9" not in control:
-    errors.append("control version is not 1.0.9")
+if "Version: 1.0.10" not in control:
+    errors.append("control version is not 1.0.10")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.9</string>" not in info:
-    errors.append("preference bundle version is not 1.0.9")
-if "BadgeForge 1.0.9 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.9")
+if "<string>1.0.10</string>" not in info:
+    errors.append("preference bundle version is not 1.0.10")
+if "BadgeForge 1.0.10 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.10")
 
 for token in [
     "LCPParseColorString",
@@ -169,7 +169,36 @@ for token in [
     "fill.bg=",
 ]:
     if token not in source:
-        errors.append(f"Tweak.xm missing v1.0.9 visible badge fill component: {token}")
+        errors.append(f"Tweak.xm missing visible badge fill component: {token}")
+
+# v1.0.10: color the stock raster itself and keep the fallback fill aligned
+# even while iOS 17 reports a temporary 0x0 background view.
+for token in [
+    "imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate",
+    "BFResolvedBadgeSize",
+    "BFSyncFillGeometry",
+    'BFSendSize0(badge, @"badgeSize")',
+    "intrinsicContentSizeForTextImage:",
+    "_resizeForTextImage:(UIImage *)image",
+    "_layOutTextImageView:(UIImageView *)imageView",
+    "fill-geometry badge=",
+]:
+    if token not in source:
+        errors.append(f"Tweak.xm missing v1.0.10 Home Screen badge component: {token}")
+
+# The libcolorpicker rows remain nested-only on disk; the preference controller
+# may only update the runtime fallback displayed by the cell from the already
+# persisted selected color.
+for token in [
+    "BFDirectSavedColor",
+    "BFCurrentSavedColor",
+    "bf_syncColorPickerFallbacksToSavedValues",
+    'updatedPicker[@"fallback"] = savedValue',
+    "reloadSpecifiers",
+    "/var/jb/var/mobile/Library/Preferences/com.joemama383.badgeforge.plist",
+]:
+    if token not in prefs_controller:
+        errors.append(f"preference controller missing v1.0.10 saved-color display sync: {token}")
 
 if errors:
     print("\nFAILED")
