@@ -39,6 +39,7 @@ static BFLCPParseColorStringFunction BFLCPParseColorString = NULL;
 
 static NSHashTable *BFLiveBadgeViews;
 static NSCache *BFAdaptiveColorCache;
+static NSCache *BFSolidBadgeImageCache;
 
 @interface BFBadgeSnapshot : NSObject
 @property (nonatomic, strong) UIImage *textImage;
@@ -75,7 +76,6 @@ static const void *BFSnapshotKey = &BFSnapshotKey;
 static const void *BFAppliedKey = &BFAppliedKey;
 static const void *BFProbeDumpedKey = &BFProbeDumpedKey;
 static const void *BFProbeApplyCountKey = &BFProbeApplyCountKey;
-static const void *BFFillLayerKey = &BFFillLayerKey;
 
 #pragma mark - Probe logging
 
@@ -819,16 +819,20 @@ static void BFProbePostApply(id badge, BFPalette *palette, UIView *backgroundVie
     NSUInteger applyCount = [objc_getAssociatedObject(badge, BFProbeApplyCountKey) unsignedIntegerValue] + 1;
     objc_setAssociatedObject(badge, BFProbeApplyCountKey, @(applyCount), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (applyCount > 3) return;
+
+    UIImageView *backgroundImageView = [backgroundView isKindOfClass:[UIImageView class]] ? (UIImageView *)backgroundView : nil;
+    UIImageView *textImageView = [textView isKindOfClass:[UIImageView class]] ? (UIImageView *)textView : nil;
     BFProbeLog(@"apply badge=%p bgView=%@ textView=%@ palette bg=%@ text=%@ border=%@ width=%.2f",
                badge, NSStringFromClass([backgroundView class]), NSStringFromClass([textView class]),
                BFProbeColorDescription(palette.backgroundColor), BFProbeColorDescription(palette.textColor),
                BFProbeColorDescription(palette.borderColor), BFBorderEnabled ? BFBorderWidth : 0.0);
-    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
-    BFProbeLog(@"after-write bg.background=%@ bg.tint=%@ layer.bg=%@ fill.bg=%@ fill.frame=%@ layer.border=%@/%.2f text.background=%@ text.tint=%@",
-               BFProbeColorDescription(backgroundView.backgroundColor), BFProbeColorDescription(backgroundView.tintColor),
-               BFProbeCGColorDescription(backgroundView.layer.backgroundColor), BFProbeCGColorDescription(fillLayer.backgroundColor), NSStringFromCGRect(fillLayer.frame),
-               BFProbeCGColorDescription(backgroundView.layer.borderColor), backgroundView.layer.borderWidth,
-               BFProbeColorDescription(textView.backgroundColor), BFProbeColorDescription(textView.tintColor));
+    BFProbeLog(@"after-write bg.frame=%@ bg.background=%@ bg.tint=%@ bg.image=%@/%@ layer.border=%@/%.2f masks=%d text.image=%@/%@ text.tint=%@",
+               NSStringFromCGRect(backgroundView.frame), BFProbeColorDescription(backgroundView.backgroundColor), BFProbeColorDescription(backgroundView.tintColor),
+               backgroundImageView.image ? NSStringFromCGSize(backgroundImageView.image.size) : @"<nil>",
+               backgroundImageView.image ? @(backgroundImageView.image.renderingMode) : @"<nil>",
+               BFProbeCGColorDescription(backgroundView.layer.borderColor), backgroundView.layer.borderWidth, backgroundView.layer.masksToBounds,
+               textImageView.image ? NSStringFromCGSize(textImageView.image.size) : @"<nil>",
+               textImageView.image ? @(textImageView.image.renderingMode) : @"<nil>", BFProbeColorDescription(textView.tintColor));
 
     __weak id weakBadge = badge;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -836,12 +840,14 @@ static void BFProbePostApply(id badge, BFPalette *palette, UIView *backgroundVie
         if (!strongBadge) return;
         UIView *bg = BFBackgroundView(strongBadge);
         UIView *txt = BFTextView(strongBadge);
-        CALayer *fillLayer = objc_getAssociatedObject(bg, BFFillLayerKey);
-        BFProbeLog(@"after-80ms badge=%p bgClass=%@ bg.background=%@ bg.tint=%@ layer.bg=%@ fill.bg=%@ fill.frame=%@ layer.border=%@/%.2f textClass=%@ text.background=%@ text.tint=%@",
-                   strongBadge, NSStringFromClass([bg class]), BFProbeColorDescription(bg.backgroundColor), BFProbeColorDescription(bg.tintColor),
-                   BFProbeCGColorDescription(bg.layer.backgroundColor), BFProbeCGColorDescription(fillLayer.backgroundColor), NSStringFromCGRect(fillLayer.frame),
-                   BFProbeCGColorDescription(bg.layer.borderColor), bg.layer.borderWidth,
-                   NSStringFromClass([txt class]), BFProbeColorDescription(txt.backgroundColor), BFProbeColorDescription(txt.tintColor));
+        UIImageView *bgiv = [bg isKindOfClass:[UIImageView class]] ? (UIImageView *)bg : nil;
+        UIImageView *txiv = [txt isKindOfClass:[UIImageView class]] ? (UIImageView *)txt : nil;
+        BFProbeLog(@"after-80ms badge=%p bg.frame=%@ bg.background=%@ bg.tint=%@ bg.image=%@/%@ layer.border=%@/%.2f masks=%d text.image=%@/%@ text.tint=%@",
+                   strongBadge, NSStringFromCGRect(bg.frame), BFProbeColorDescription(bg.backgroundColor), BFProbeColorDescription(bg.tintColor),
+                   bgiv.image ? NSStringFromCGSize(bgiv.image.size) : @"<nil>", bgiv.image ? @(bgiv.image.renderingMode) : @"<nil>",
+                   BFProbeCGColorDescription(bg.layer.borderColor), bg.layer.borderWidth, bg.layer.masksToBounds,
+                   txiv.image ? NSStringFromCGSize(txiv.image.size) : @"<nil>", txiv.image ? @(txiv.image.renderingMode) : @"<nil>",
+                   BFProbeColorDescription(txt.tintColor));
     });
 }
 
@@ -897,12 +903,6 @@ static void BFRestoreBadge(id badge) {
     UIView *backgroundView = BFBackgroundView(badge);
     UIView *textView = BFTextView(badge);
 
-    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
-    if (fillLayer) {
-        [fillLayer removeFromSuperlayer];
-        objc_setAssociatedObject(backgroundView, BFFillLayerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-
     if ([textView isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)textView;
         imageView.image = snapshot.textImage;
@@ -933,71 +933,37 @@ static void BFRegisterBadge(id badge) {
     [BFLiveBadgeViews addObject:badge];
 }
 
-static BOOL BFUsableBadgeSize(CGSize size) {
-    return isfinite(size.width) && isfinite(size.height) && size.width > 0.5 && size.height > 0.5;
+static NSString *BFColorCacheKey(UIColor *color) {
+    CGFloat r = 0.0, g = 0.0, b = 0.0, a = 0.0;
+    if ([color getRed:&r green:&g blue:&b alpha:&a]) {
+        return [NSString stringWithFormat:@"%.5f,%.5f,%.5f,%.5f", r, g, b, a];
+    }
+    CGFloat w = 0.0;
+    if ([color getWhite:&w alpha:&a]) {
+        return [NSString stringWithFormat:@"w%.5f,%.5f", w, a];
+    }
+    return color.description ?: @"<color>";
 }
 
-static CGSize BFResolvedBadgeSize(id badge, UIView *backgroundView, UIView *textView) {
-    CGSize size = backgroundView.bounds.size;
-    if (BFUsableBadgeSize(size)) return size;
+static UIImage *BFSolidBadgeImage(UIColor *color) {
+    if (!color) return nil;
+    NSString *key = BFColorCacheKey(color);
+    UIImage *cached = [BFSolidBadgeImageCache objectForKey:key];
+    if (cached) return cached;
 
-    if ([badge isKindOfClass:[UIView class]]) {
-        size = ((UIView *)badge).bounds.size;
-        if (BFUsableBadgeSize(size)) return size;
-    }
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(2.0, 2.0), NO, 1.0);
+    [color setFill];
+    UIRectFill(CGRectMake(0.0, 0.0, 2.0, 2.0));
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    if (!image) return nil;
 
-    // iOS 17 exposes the final stock badge size even during transitions where
-    // _backgroundView still temporarily reports a 0x0 bounds rectangle.
-    size = BFSendSize0(badge, @"badgeSize");
-    if (BFUsableBadgeSize(size)) return size;
-
-    if ([textView isKindOfClass:[UIImageView class]]) {
-        UIImage *textImage = ((UIImageView *)textView).image;
-        if (textImage) {
-            size = BFSendSize1(badge, @"intrinsicContentSizeForTextImage:", textImage);
-            if (BFUsableBadgeSize(size)) return size;
-        }
-    }
-
-    return CGSizeZero;
+    image = [image resizableImageWithCapInsets:UIEdgeInsetsZero resizingMode:UIImageResizingModeStretch];
+    [BFSolidBadgeImageCache setObject:image forKey:key];
+    return image;
 }
 
-static void BFSyncFillGeometry(id badge) {
-    UIView *backgroundView = BFBackgroundView(badge);
-    UIView *textView = BFTextView(badge);
-    if (!backgroundView) return;
-
-    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
-    if (!fillLayer) return;
-
-    CGSize size = BFResolvedBadgeSize(badge, backgroundView, textView);
-    if (!BFUsableBadgeSize(size)) return;
-
-    BOOL backgroundHasRealBounds = BFUsableBadgeSize(backgroundView.bounds.size);
-    BOOL geometryChanged = !CGSizeEqualToSize(fillLayer.frame.size, size);
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    fillLayer.frame = (CGRect){ CGPointZero, size };
-    CGFloat radius = size.height * 0.5;
-    fillLayer.cornerRadius = radius;
-    fillLayer.masksToBounds = YES;
-
-    // When SpringBoard has not sized SBDarkeningImageView yet, do not let its
-    // temporary 0x0 bounds clip our already-known stock badge dimensions.
-    // Once the real bounds arrive the ordinary layout hook restores clipping.
-    backgroundView.layer.masksToBounds = backgroundHasRealBounds;
-    if (@available(iOS 13.0, *)) fillLayer.cornerCurve = kCACornerCurveContinuous;
-    [CATransaction commit];
-
-    if (geometryChanged) {
-        BFProbeLog(@"fill-geometry badge=%p bg.bounds=%@ badge.bounds=%@ resolved=%@ source=%@",
-                   badge, NSStringFromCGRect(backgroundView.bounds),
-                   [badge isKindOfClass:[UIView class]] ? NSStringFromCGRect(((UIView *)badge).bounds) : @"<nonview>",
-                   NSStringFromCGSize(size), backgroundHasRealBounds ? @"background" : @"badgeSize-fallback");
-    }
-}
-
-static void BFApplyBadge(id badge) {
+static void BFApplyBadgeWithTextImageHint(id badge, UIImage *textImageHint) {
     if (!badge) return;
     if (!BFEnabled) {
         BFRestoreBadge(badge);
@@ -1014,63 +980,64 @@ static void BFApplyBadge(id badge) {
     BFProbeDumpBadge(badge, icon);
     BFPalette *palette = BFPaletteForIcon(icon);
 
-    // iOS 17's SBDarkeningImageView paints the stock red badge through its
-    // image/layer contents. backgroundColor and tintColor can both change
-    // successfully while that opaque stock image remains visible. Put a
-    // dedicated solid layer above the image contents but below _textView so
-    // static and adaptive backgrounds actually become the visible badge fill.
-    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
-    if (!fillLayer) {
-        fillLayer = [CALayer layer];
-        fillLayer.name = @"BadgeForgeFill";
-        [backgroundView.layer insertSublayer:fillLayer atIndex:0];
-        objc_setAssociatedObject(backgroundView, BFFillLayerKey, fillLayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    } else if (fillLayer.superlayer != backgroundView.layer) {
-        [backgroundView.layer insertSublayer:fillLayer atIndex:0];
-    }
-
-    fillLayer.backgroundColor = palette.backgroundColor.CGColor;
-    fillLayer.opacity = 1.0;
-    fillLayer.hidden = NO;
-
-    // Tinge recolors the stock raster itself by forcing UIImage rendering into
-    // template mode. Doing the same here is more reliable than relying only on
-    // an overlay layer: Home Screen badges can have a temporarily 0x0
-    // SBDarkeningImageView while their stock image is being configured.
+    // Do not leave Apple's stock red badge raster in the painter.  On iOS 17
+    // Home Screen badges replace that raster later than Dock badges, which is
+    // why tint-only builds appeared correct in the Dock but reverted to red on
+    // the Home Screen.  A real solid-color resizable UIImage remains correct
+    // when the zero-sized image view receives its final bounds later.
     if ([backgroundView isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)backgroundView;
-        UIImage *image = imageView.image;
-        if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-            imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        }
+        imageView.image = BFSolidBadgeImage(palette.backgroundColor);
         imageView.tintColor = palette.backgroundColor;
     }
-
-    // Keep these synchronized as well for transitions and any SpringBoard
-    // code that samples the view's own tint/background properties.
     backgroundView.backgroundColor = palette.backgroundColor;
     backgroundView.tintColor = palette.backgroundColor;
 
+    // Preserve the original working text path: make the current/final text
+    // raster a template and tint it.  Private iOS 17 text-image callbacks below
+    // call this again after SpringBoard swaps the image so the selected text
+    // color cannot be lost during badge relayout.
     if ([textView isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)textView;
-        UIImage *image = imageView.image;
+        UIImage *image = textImageHint ?: imageView.image;
         if (image) imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         imageView.tintColor = palette.textColor;
     } else if ([textView isKindOfClass:[UILabel class]]) {
         ((UILabel *)textView).textColor = palette.textColor;
     }
 
+    // This is intentionally the exact border mechanism used by the first
+    // BadgeForge build: borderWidth/borderColor live on _backgroundView.layer,
+    // with clipping enabled and a capsule corner radius derived from real
+    // bounds when available.  Do not route border geometry through the custom
+    // background painter.
     CALayer *layer = backgroundView.layer;
     layer.borderWidth = BFBorderEnabled ? BFBorderWidth : 0.0;
     layer.borderColor = (BFBorderEnabled ? palette.borderColor : UIColor.clearColor).CGColor;
     CGFloat height = CGRectGetHeight(backgroundView.bounds);
     if (height > 0.0) layer.cornerRadius = height * 0.5;
+    layer.masksToBounds = YES;
     if (@available(iOS 13.0, *)) layer.cornerCurve = kCACornerCurveContinuous;
-
-    BFSyncFillGeometry(badge);
 
     objc_setAssociatedObject(badge, BFAppliedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     BFProbePostApply(badge, palette, backgroundView, textView);
+}
+
+static void BFApplyBadge(id badge) {
+    BFApplyBadgeWithTextImageHint(badge, nil);
+}
+
+static void BFScheduleFinalBadgeReapply(id badge) {
+    if (!badge) return;
+    __weak id weakBadge = badge;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        id strongBadge = weakBadge;
+        if (strongBadge) BFApplyBadge(strongBadge);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        id strongBadge = weakBadge;
+        if (strongBadge) BFApplyBadge(strongBadge);
+    });
 }
 
 static void BFRefreshAllBadges(void) {
@@ -1136,6 +1103,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
     BFCaptureSnapshot(self);
     BFRegisterBadge(self);
     BFApplyBadge(self);
+    BFScheduleFinalBadgeReapply(self);
 }
 
 - (void)configureAnimatedForIcon:(id)icon infoProvider:(id)provider animator:(id)animator {
@@ -1146,23 +1114,38 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
     BFCaptureSnapshot(self);
     BFRegisterBadge(self);
     BFApplyBadge(self);
+    BFScheduleFinalBadgeReapply(self);
+}
+
+- (void)_configureAnimatedForText:(NSString *)text highlighted:(BOOL)highlighted animator:(id)animator {
+    %orig;
+    BFProbeLog(@"HOOK final text configure badge=%p text=%@ highlighted=%d", self, text, highlighted);
+    BFApplyBadge(self);
+    BFScheduleFinalBadgeReapply(self);
 }
 
 - (void)_crossfadeToTextImage:(UIImage *)image animator:(id)animator {
     BFRestoreBadge(self);
     %orig;
     BFCaptureSnapshot(self);
-    BFApplyBadge(self);
+    BFApplyBadgeWithTextImageHint(self, image);
+    BFScheduleFinalBadgeReapply(self);
+}
+
+- (void)_zoomInWithTextImage:(UIImage *)image animator:(id)animator {
+    %orig;
+    BFApplyBadgeWithTextImageHint(self, image);
+    BFScheduleFinalBadgeReapply(self);
 }
 
 - (void)_resizeForTextImage:(UIImage *)image {
     %orig;
-    BFSyncFillGeometry(self);
+    BFApplyBadgeWithTextImageHint(self, image);
 }
 
 - (void)_layOutTextImageView:(UIImageView *)imageView {
     %orig;
-    BFSyncFillGeometry(self);
+    BFApplyBadgeWithTextImageHint(self, imageView.image);
 }
 
 - (void)drawRect:(CGRect)rect {
@@ -1173,7 +1156,6 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 - (void)layoutSubviews {
     %orig;
     BFApplyBadge(self);
-    BFSyncFillGeometry(self);
 }
 
 - (void)didMoveToWindow {
@@ -1181,6 +1163,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
     if (self.window) {
         BFRegisterBadge(self);
         BFApplyBadge(self);
+        BFScheduleFinalBadgeReapply(self);
     }
 }
 
@@ -1209,13 +1192,15 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
-        BFProbeLog(@"\n\n===== BadgeForge 1.0.10 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.11 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
         BFProbeJailbreakEnvironment();
         BFProbeDiscoverBadgeClasses();
         BFLoadColorPickerParser();
         BFLiveBadgeViews = [NSHashTable weakObjectsHashTable];
         BFAdaptiveColorCache = [NSCache new];
         BFAdaptiveColorCache.countLimit = 256;
+        BFSolidBadgeImageCache = [NSCache new];
+        BFSolidBadgeImageCache.countLimit = 64;
         BFLoadPreferences();
 
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),

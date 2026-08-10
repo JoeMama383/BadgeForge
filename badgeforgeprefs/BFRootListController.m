@@ -55,7 +55,7 @@ static id BFCurrentSavedColor(NSString *key) {
 }
 
 - (void)bf_syncColorPickerFallbacksToSavedValues {
-    BOOL changed = NO;
+    NSMutableArray<PSSpecifier *> *changedSpecifiers = [NSMutableArray array];
 
     // PFSimpleLiteColorCell on current rootless Preferences can keep displaying
     // the static fallback after its picker writes the real value. The runtime
@@ -78,10 +78,12 @@ static id BFCurrentSavedColor(NSString *key) {
         NSMutableDictionary *updatedPicker = [picker mutableCopy];
         updatedPicker[@"fallback"] = savedValue;
         [specifier setProperty:updatedPicker forKey:@"libcolorpicker"];
-        changed = YES;
+        [changedSpecifiers addObject:specifier];
     }
 
-    if (changed) [self reloadSpecifiers];
+    for (PSSpecifier *specifier in changedSpecifiers) {
+        [self reloadSpecifier:specifier];
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated {

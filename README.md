@@ -33,6 +33,13 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.11
+
+- Replace the iOS 17 stock red badge background raster with a real solid-color resizable image, so Home Screen badges keep the computed Adaptive/Static color even when SpringBoard assigns final badge bounds after configuration.
+- Rebase text tinting and border width/color on the exact first-build `_textView` and `_backgroundView.layer` paths; remove the v1.0.10 fill-geometry path from those features.
+- Reapply final badge appearance after `_configureAnimatedForText:highlighted:animator:`, `_resizeForTextImage:`, `_layOutTextImageView:`, crossfade, and zoom transitions so late iOS 17 image swaps cannot restore red/white stock artwork.
+- Keep the saved-color swatch fix but reload only the three color rows, not the entire preference list, so Border Width editing is not disturbed when returning from a color picker.
+
 ## v1.0.10
 
 - Recolor iOS 17's stock badge background image itself in template mode, matching the mechanism used by Tinge instead of depending solely on an overlay layer. This keeps Adaptive/Static background colors visible for Home Screen badges as well as Dock badges.

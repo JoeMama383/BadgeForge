@@ -1,6 +1,6 @@
 Package: com.joemama383.badgeforge
 Name: BadgeForge
-Version: 1.0.10
+Version: 1.0.11
 Architecture: iphoneos-arm64
 Description: Adaptive and static notification badge colors, text colors, and borders for iOS 17.
 Maintainer: JoeMama383

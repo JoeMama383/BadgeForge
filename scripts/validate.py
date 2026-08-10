@@ -103,13 +103,13 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.10" not in control:
-    errors.append("control version is not 1.0.10")
+if "Version: 1.0.11" not in control:
+    errors.append("control version is not 1.0.11")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.10</string>" not in info:
-    errors.append("preference bundle version is not 1.0.10")
-if "BadgeForge 1.0.10 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.10")
+if "<string>1.0.11</string>" not in info:
+    errors.append("preference bundle version is not 1.0.11")
+if "BadgeForge 1.0.11 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.11")
 
 for token in [
     "LCPParseColorString",
@@ -161,30 +161,29 @@ for row in color_rows:
         if key not in nested:
             errors.append(f"color row {row.get('label')} missing nested libcolorpicker {key}")
 
+# v1.0.11: paint a real solid background raster rather than relying on the
+# v1.0.9/v1.0.10 overlay geometry that only became visible reliably in Dock.
 for token in [
-    "BFFillLayerKey",
-    "BadgeForgeFill",
-    "insertSublayer:fillLayer atIndex:0",
-    "fillLayer.backgroundColor = palette.backgroundColor.CGColor",
-    "fill.bg=",
-]:
-    if token not in source:
-        errors.append(f"Tweak.xm missing visible badge fill component: {token}")
-
-# v1.0.10: color the stock raster itself and keep the fallback fill aligned
-# even while iOS 17 reports a temporary 0x0 background view.
-for token in [
-    "imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate",
-    "BFResolvedBadgeSize",
-    "BFSyncFillGeometry",
-    'BFSendSize0(badge, @"badgeSize")',
-    "intrinsicContentSizeForTextImage:",
+    "BFSolidBadgeImage",
+    "BFSolidBadgeImageCache",
+    "resizableImageWithCapInsets:UIEdgeInsetsZero",
+    "imageView.image = BFSolidBadgeImage(palette.backgroundColor)",
+    "layer.borderWidth = BFBorderEnabled ? BFBorderWidth : 0.0",
+    "layer.masksToBounds = YES",
+    "BFApplyBadgeWithTextImageHint",
+    "BFScheduleFinalBadgeReapply",
+    "_configureAnimatedForText:(NSString *)text highlighted:(BOOL)highlighted animator:(id)animator",
     "_resizeForTextImage:(UIImage *)image",
     "_layOutTextImageView:(UIImageView *)imageView",
-    "fill-geometry badge=",
+    "_zoomInWithTextImage:(UIImage *)image animator:(id)animator",
 ]:
     if token not in source:
-        errors.append(f"Tweak.xm missing v1.0.10 Home Screen badge component: {token}")
+        errors.append(f"Tweak.xm missing v1.0.11 regression-safe badge component: {token}")
+
+for forbidden in ["BFFillLayerKey", "BadgeForgeFill", "BFSyncFillGeometry"]:
+    if forbidden in source:
+        errors.append(f"Tweak.xm still contains retired v1.0.10 fill-geometry component: {forbidden}")
+
 
 # The libcolorpicker rows remain nested-only on disk; the preference controller
 # may only update the runtime fallback displayed by the cell from the already
@@ -194,11 +193,13 @@ for token in [
     "BFCurrentSavedColor",
     "bf_syncColorPickerFallbacksToSavedValues",
     'updatedPicker[@"fallback"] = savedValue',
-    "reloadSpecifiers",
+    "reloadSpecifier:specifier",
     "/var/jb/var/mobile/Library/Preferences/com.joemama383.badgeforge.plist",
 ]:
     if token not in prefs_controller:
-        errors.append(f"preference controller missing v1.0.10 saved-color display sync: {token}")
+        errors.append(f"preference controller missing v1.0.11 saved-color display sync: {token}")
+if "reloadSpecifiers" in prefs_controller:
+    errors.append("preference controller still reloads the entire list and can disrupt Border Width editing")
 
 if errors:
     print("\nFAILED")
