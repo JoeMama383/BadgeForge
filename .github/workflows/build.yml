@@ -12,6 +12,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Install Theos build dependencies
+        run: |
+          brew install ldid xz
+          command -v ldid
+
       - name: Install Theos
         run: |
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"

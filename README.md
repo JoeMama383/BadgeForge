@@ -33,6 +33,11 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.2
+
+- Fix GitHub Actions signing on macOS by installing Theos' required `ldid` and `xz` build dependencies before compiling.
+- Verify `ldid` is on `PATH` before the package build starts.
+
 ## v1.0.1
 
 - Fix Objective-C++ compilation on Theos by explicitly casting `calloc` results used by the adaptive icon-color sampler.

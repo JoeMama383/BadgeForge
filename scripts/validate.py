@@ -53,6 +53,22 @@ for key in ["tweakEnabled", "badgeColorType", "badgeColor", "textColorType", "te
     if key not in prefs_text:
         errors.append(f"Root.plist missing {key}")
 
+# CI must provide ldid before Theos reaches its signing stage on macOS.
+workflow = (root / ".github/workflows/build.yml").read_text()
+if not re.search(r"brew\s+install[^\n]*\bldid\b", workflow):
+    errors.append("GitHub Actions workflow does not install ldid")
+if "command -v ldid" not in workflow:
+    errors.append("GitHub Actions workflow does not verify ldid is on PATH")
+
+# Keep user-visible/package versions synchronized.
+if "Version: 1.0.2" not in control:
+    errors.append("control version is not 1.0.2")
+info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
+if "<string>1.0.2</string>" not in info:
+    errors.append("preference bundle version is not 1.0.2")
+if "BadgeForge 1.0.2 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.2")
+
 if errors:
     print("\nFAILED")
     for err in errors:
