@@ -2,25 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>English</string>
-    <key>CFBundleDisplayName</key>
-    <string>BadgeForge</string>
-    <key>CFBundleExecutable</key>
-    <string>BadgeForgePrefs</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.joemama383.badgeforge.preferences</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>BadgeForgePrefs</string>
-    <key>CFBundlePackageType</key>
-    <string>BNDL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.8</string>
-    <key>CFBundleVersion</key>
-    <string>6</string>
-    <key>NSPrincipalClass</key>
-    <string>BFRootListController</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleDisplayName</key>
+	<string>BadgeForge</string>
+	<key>CFBundleExecutable</key>
+	<string>BadgeForgePrefs</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.joemama383.badgeforge.preferences</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>BadgeForgePrefs</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.9</string>
+	<key>CFBundleVersion</key>
+	<string>7</string>
+	<key>NSPrincipalClass</key>
+	<string>BFRootListController</string>
 </dict>
 </plist>

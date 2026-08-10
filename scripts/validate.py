@@ -103,13 +103,13 @@ for token in [
         errors.append(f"preference controller missing color-picker loader component: {token}")
 
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.8" not in control:
-    errors.append("control version is not 1.0.8")
+if "Version: 1.0.9" not in control:
+    errors.append("control version is not 1.0.9")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.8</string>" not in info:
-    errors.append("preference bundle version is not 1.0.8")
-if "BadgeForge 1.0.8 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.8")
+if "<string>1.0.9</string>" not in info:
+    errors.append("preference bundle version is not 1.0.9")
+if "BadgeForge 1.0.9 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.9")
 
 for token in [
     "LCPParseColorString",
@@ -141,14 +141,35 @@ for token in [
     if token not in source:
         errors.append(f"Tweak.xm missing v1.0.8 direct color preference bridge: {token}")
 
-for token in [
+for forbidden in [
     "readPreferenceValue:(PSSpecifier *)specifier",
     "setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier",
     "BFMirrorPreferenceToDirectPlist",
-    "CFPreferencesSetAppValue",
 ]:
-    if token not in prefs_controller:
-        errors.append(f"preference controller missing v1.0.8 persistence bridge: {token}")
+    if forbidden in prefs_controller:
+        errors.append(f"preference controller still overrides libcolorpicker persistence: {forbidden}")
+
+root_plist = plistlib.loads((root / "badgeforgeprefs/Resources/Root.plist").read_bytes())
+color_rows = [item for item in root_plist.get("items", []) if item.get("cellClass") == "PFSimpleLiteColorCell"]
+if len(color_rows) != 3:
+    errors.append(f"expected 3 libcolorpicker rows, found {len(color_rows)}")
+for row in color_rows:
+    if any(k in row for k in ("defaults", "key", "default", "PostNotification")):
+        errors.append(f"color row {row.get('label')} has top-level persistence keys; libcolorpicker must own persistence")
+    nested = row.get("libcolorpicker", {})
+    for key in ("defaults", "key", "fallback", "PostNotification"):
+        if key not in nested:
+            errors.append(f"color row {row.get('label')} missing nested libcolorpicker {key}")
+
+for token in [
+    "BFFillLayerKey",
+    "BadgeForgeFill",
+    "insertSublayer:fillLayer atIndex:0",
+    "fillLayer.backgroundColor = palette.backgroundColor.CGColor",
+    "fill.bg=",
+]:
+    if token not in source:
+        errors.append(f"Tweak.xm missing v1.0.9 visible badge fill component: {token}")
 
 if errors:
     print("\nFAILED")

@@ -33,6 +33,13 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.9
+
+- Restore the three libcolorpicker specifiers to the same nested-only persistence contract used by Tinge, removing the v1.0.8 PreferenceLoader bridge that caused selected swatches to reload as their defaults.
+- Add a dedicated `BadgeForgeFill` CALayer above iOS 17's stock `SBDarkeningImageView` image contents and below the badge text image. This makes both Static and Adaptive badge background colors visible instead of leaving Apple's red raster on top.
+- Preserve the already-working static/adaptive text colors, border width, Match Text Color, and adaptive border behavior.
+- Keep the runtime probe for one more build and log the new fill-layer color/frame so the visible painter can be verified independently of the underlying stock image.
+
 ## v1.0.8
 
 - Bridge libcolorpicker's legacy direct-plist persistence to SpringBoard on Dopamine/ElleKit so static badge, text, and border colors are actually read after selection.

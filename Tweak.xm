@@ -75,6 +75,7 @@ static const void *BFSnapshotKey = &BFSnapshotKey;
 static const void *BFAppliedKey = &BFAppliedKey;
 static const void *BFProbeDumpedKey = &BFProbeDumpedKey;
 static const void *BFProbeApplyCountKey = &BFProbeApplyCountKey;
+static const void *BFFillLayerKey = &BFFillLayerKey;
 
 #pragma mark - Probe logging
 
@@ -808,9 +809,11 @@ static void BFProbePostApply(id badge, BFPalette *palette, UIView *backgroundVie
                badge, NSStringFromClass([backgroundView class]), NSStringFromClass([textView class]),
                BFProbeColorDescription(palette.backgroundColor), BFProbeColorDescription(palette.textColor),
                BFProbeColorDescription(palette.borderColor), BFBorderEnabled ? BFBorderWidth : 0.0);
-    BFProbeLog(@"after-write bg.background=%@ bg.tint=%@ layer.bg=%@ layer.border=%@/%.2f text.background=%@ text.tint=%@",
+    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
+    BFProbeLog(@"after-write bg.background=%@ bg.tint=%@ layer.bg=%@ fill.bg=%@ fill.frame=%@ layer.border=%@/%.2f text.background=%@ text.tint=%@",
                BFProbeColorDescription(backgroundView.backgroundColor), BFProbeColorDescription(backgroundView.tintColor),
-               BFProbeCGColorDescription(backgroundView.layer.backgroundColor), BFProbeCGColorDescription(backgroundView.layer.borderColor), backgroundView.layer.borderWidth,
+               BFProbeCGColorDescription(backgroundView.layer.backgroundColor), BFProbeCGColorDescription(fillLayer.backgroundColor), NSStringFromCGRect(fillLayer.frame),
+               BFProbeCGColorDescription(backgroundView.layer.borderColor), backgroundView.layer.borderWidth,
                BFProbeColorDescription(textView.backgroundColor), BFProbeColorDescription(textView.tintColor));
 
     __weak id weakBadge = badge;
@@ -819,9 +822,11 @@ static void BFProbePostApply(id badge, BFPalette *palette, UIView *backgroundVie
         if (!strongBadge) return;
         UIView *bg = BFBackgroundView(strongBadge);
         UIView *txt = BFTextView(strongBadge);
-        BFProbeLog(@"after-80ms badge=%p bgClass=%@ bg.background=%@ bg.tint=%@ layer.bg=%@ layer.border=%@/%.2f textClass=%@ text.background=%@ text.tint=%@",
+        CALayer *fillLayer = objc_getAssociatedObject(bg, BFFillLayerKey);
+        BFProbeLog(@"after-80ms badge=%p bgClass=%@ bg.background=%@ bg.tint=%@ layer.bg=%@ fill.bg=%@ fill.frame=%@ layer.border=%@/%.2f textClass=%@ text.background=%@ text.tint=%@",
                    strongBadge, NSStringFromClass([bg class]), BFProbeColorDescription(bg.backgroundColor), BFProbeColorDescription(bg.tintColor),
-                   BFProbeCGColorDescription(bg.layer.backgroundColor), BFProbeCGColorDescription(bg.layer.borderColor), bg.layer.borderWidth,
+                   BFProbeCGColorDescription(bg.layer.backgroundColor), BFProbeCGColorDescription(fillLayer.backgroundColor), NSStringFromCGRect(fillLayer.frame),
+                   BFProbeCGColorDescription(bg.layer.borderColor), bg.layer.borderWidth,
                    NSStringFromClass([txt class]), BFProbeColorDescription(txt.backgroundColor), BFProbeColorDescription(txt.tintColor));
     });
 }
@@ -878,6 +883,12 @@ static void BFRestoreBadge(id badge) {
     UIView *backgroundView = BFBackgroundView(badge);
     UIView *textView = BFTextView(badge);
 
+    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
+    if (fillLayer) {
+        [fillLayer removeFromSuperlayer];
+        objc_setAssociatedObject(backgroundView, BFFillLayerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     if ([textView isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)textView;
         imageView.image = snapshot.textImage;
@@ -925,13 +936,30 @@ static void BFApplyBadge(id badge) {
     BFProbeDumpBadge(badge, icon);
     BFPalette *palette = BFPaletteForIcon(icon);
 
-    if ([backgroundView isKindOfClass:[UIImageView class]]) {
-        UIImageView *imageView = (UIImageView *)backgroundView;
-        UIImage *image = imageView.image;
-        if (image) imageView.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        imageView.tintColor = palette.backgroundColor;
+    // iOS 17's SBDarkeningImageView paints the stock red badge through its
+    // image/layer contents. backgroundColor and tintColor can both change
+    // successfully while that opaque stock image remains visible. Put a
+    // dedicated solid layer above the image contents but below _textView so
+    // static and adaptive backgrounds actually become the visible badge fill.
+    CALayer *fillLayer = objc_getAssociatedObject(backgroundView, BFFillLayerKey);
+    if (!fillLayer) {
+        fillLayer = [CALayer layer];
+        fillLayer.name = @"BadgeForgeFill";
+        [backgroundView.layer insertSublayer:fillLayer atIndex:0];
+        objc_setAssociatedObject(backgroundView, BFFillLayerKey, fillLayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else if (fillLayer.superlayer != backgroundView.layer) {
+        [backgroundView.layer insertSublayer:fillLayer atIndex:0];
     }
+
+    fillLayer.frame = backgroundView.bounds;
+    fillLayer.backgroundColor = palette.backgroundColor.CGColor;
+    fillLayer.opacity = 1.0;
+    fillLayer.hidden = NO;
+
+    // Keep these synchronized as well for transitions and any SpringBoard
+    // code that samples the view's own tint/background properties.
     backgroundView.backgroundColor = palette.backgroundColor;
+    backgroundView.tintColor = palette.backgroundColor;
 
     if ([textView isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)textView;
@@ -946,9 +974,17 @@ static void BFApplyBadge(id badge) {
     layer.borderWidth = BFBorderEnabled ? BFBorderWidth : 0.0;
     layer.borderColor = (BFBorderEnabled ? palette.borderColor : UIColor.clearColor).CGColor;
     CGFloat height = CGRectGetHeight(backgroundView.bounds);
-    if (height > 0.0) layer.cornerRadius = height * 0.5;
+    if (height > 0.0) {
+        CGFloat radius = height * 0.5;
+        layer.cornerRadius = radius;
+        fillLayer.cornerRadius = radius;
+    }
+    fillLayer.masksToBounds = YES;
     layer.masksToBounds = YES;
-    if (@available(iOS 13.0, *)) layer.cornerCurve = kCACornerCurveContinuous;
+    if (@available(iOS 13.0, *)) {
+        layer.cornerCurve = kCACornerCurveContinuous;
+        fillLayer.cornerCurve = kCACornerCurveContinuous;
+    }
 
     objc_setAssociatedObject(badge, BFAppliedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     BFProbePostApply(badge, palette, backgroundView, textView);
@@ -1079,7 +1115,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
-        BFProbeLog(@"\n\n===== BadgeForge 1.0.8 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.9 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
         BFProbeJailbreakEnvironment();
         BFProbeDiscoverBadgeClasses();
         BFLoadColorPickerParser();
