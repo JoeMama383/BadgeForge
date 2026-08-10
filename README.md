@@ -33,7 +33,7 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
-## v1.0.3
+## v1.0.4
 
 - Install Theos' patched iOS SDK in GitHub Actions so private frameworks such as Preferences are linkable.
 - Export an explicit iPhoneOS 16.5 SDK / iOS 15 deployment target to the preference-bundle subproject. The package itself remains restricted to iOS 17+ by its firmware dependency.

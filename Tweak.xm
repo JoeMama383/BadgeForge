@@ -25,7 +25,7 @@ static NSString *BFTextColorHex = @"#FFFFFF";
 static NSString *BFBorderColorHex = @"#FFFFFF";
 
 static NSHashTable *BFLiveBadgeViews;
-static NSCache *BFDominantColorCache;
+static NSCache *BFAdaptiveColorCache;
 
 @interface BFBadgeSnapshot : NSObject
 @property (nonatomic, strong) UIImage *textImage;
@@ -194,13 +194,14 @@ static UIColor *BFAdaptiveBorderColor(UIColor *background) {
     return UIColor.whiteColor;
 }
 
-static UIColor *BFDominantColorFromImage(UIImage *image) {
+static UIColor *BFAverageColorFromImage(UIImage *image) {
     if (!image) return nil;
     CGImageRef cgImage = image.CGImage;
     if (!cgImage) return nil;
 
-    const size_t width = 32;
-    const size_t height = 32;
+    // A small raster is plenty for a badge color and keeps SpringBoard work bounded.
+    const size_t width = 40;
+    const size_t height = 40;
     const size_t bytesPerRow = width * 4;
     uint8_t *pixels = static_cast<uint8_t *>(calloc(height, bytesPerRow));
     if (!pixels) return nil;
@@ -215,70 +216,63 @@ static UIColor *BFDominantColorFromImage(UIImage *image) {
         return nil;
     }
 
-    CGContextSetInterpolationQuality(context, kCGInterpolationMedium);
+    CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
     CGContextDrawImage(context, CGRectMake(0, 0, width, height), cgImage);
     CGContextRelease(context);
 
-    const int binCount = 4096; // 16 bins per RGB channel.
-    double *weights = static_cast<double *>(calloc(binCount, sizeof(double)));
-    double *sumR = static_cast<double *>(calloc(binCount, sizeof(double)));
-    double *sumG = static_cast<double *>(calloc(binCount, sizeof(double)));
-    double *sumB = static_cast<double *>(calloc(binCount, sizeof(double)));
-    if (!weights || !sumR || !sumG || !sumB) {
-        free(weights); free(sumR); free(sumG); free(sumB); free(pixels);
-        return nil;
-    }
+    double weightedR = 0.0, weightedG = 0.0, weightedB = 0.0, totalWeight = 0.0;
+    double fallbackR = 0.0, fallbackG = 0.0, fallbackB = 0.0, fallbackWeight = 0.0;
 
     for (size_t y = 0; y < height; y++) {
         for (size_t x = 0; x < width; x++) {
-            uint8_t *p = pixels + y * bytesPerRow + x * 4;
-            CGFloat r = p[0] / 255.0;
-            CGFloat g = p[1] / 255.0;
-            CGFloat b = p[2] / 255.0;
-            CGFloat a = p[3] / 255.0;
-            if (a < 0.20) continue;
+            uint8_t *pixel = pixels + y * bytesPerRow + x * 4;
+            CGFloat alpha = pixel[3] / 255.0;
+            if (alpha < 0.08) continue;
+
+            // The bitmap is premultiplied. Un-premultiply before averaging so
+            // partially transparent antialiasing pixels do not skew toward black.
+            CGFloat r = MIN(1.0, (pixel[0] / 255.0) / alpha);
+            CGFloat g = MIN(1.0, (pixel[1] / 255.0) / alpha);
+            CGFloat b = MIN(1.0, (pixel[2] / 255.0) / alpha);
+
+            fallbackR += r * alpha;
+            fallbackG += g * alpha;
+            fallbackB += b * alpha;
+            fallbackWeight += alpha;
 
             CGFloat maxC = MAX(r, MAX(g, b));
             CGFloat minC = MIN(r, MIN(g, b));
             CGFloat saturation = maxC > 0.001 ? (maxC - minC) / maxC : 0.0;
-            CGFloat weight = 0.35 + 2.65 * saturation;
 
-            // Downweight flat white/black icon backgrounds without fully discarding them.
-            if ((maxC > 0.95 || maxC < 0.07) && saturation < 0.10) weight *= 0.10;
-            weight *= a;
+            // This is still an average, not a single winning histogram bin. Give
+            // chromatic pixels more influence so white/black icon backgrounds do
+            // not wash a colorful app icon down to grey.
+            CGFloat weight = alpha * (0.35 + 1.65 * saturation);
+            if (saturation < 0.08 && (maxC > 0.94 || maxC < 0.08)) weight *= 0.18;
 
-            int ri = MIN(15, (int)floor(r * 16.0));
-            int gi = MIN(15, (int)floor(g * 16.0));
-            int bi = MIN(15, (int)floor(b * 16.0));
-            int index = (ri << 8) | (gi << 4) | bi;
-            weights[index] += weight;
-            sumR[index] += r * weight;
-            sumG[index] += g * weight;
-            sumB[index] += b * weight;
-        }
-    }
-
-    int winner = -1;
-    double bestWeight = 0.0;
-    for (int i = 0; i < binCount; i++) {
-        if (weights[i] > bestWeight) {
-            bestWeight = weights[i];
-            winner = i;
+            weightedR += r * weight;
+            weightedG += g * weight;
+            weightedB += b * weight;
+            totalWeight += weight;
         }
     }
 
     UIColor *result = nil;
-    if (winner >= 0 && bestWeight > 0.0001) {
-        CGFloat r = sumR[winner] / bestWeight;
-        CGFloat g = sumG[winner] / bestWeight;
-        CGFloat b = sumB[winner] / bestWeight;
-        result = [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+    if (totalWeight > 0.0001) {
+        result = [UIColor colorWithRed:weightedR / totalWeight
+                                 green:weightedG / totalWeight
+                                  blue:weightedB / totalWeight
+                                 alpha:1.0];
+    } else if (fallbackWeight > 0.0001) {
+        result = [UIColor colorWithRed:fallbackR / fallbackWeight
+                                 green:fallbackG / fallbackWeight
+                                  blue:fallbackB / fallbackWeight
+                                 alpha:1.0];
     }
 
-    free(weights); free(sumR); free(sumG); free(sumB); free(pixels);
+    free(pixels);
     return result;
 }
-
 #pragma mark - App icon color source
 
 typedef struct {
@@ -325,7 +319,76 @@ static NSString *BFIconIdentifier(id icon) {
     return [NSString stringWithFormat:@"%p-%@", icon, NSStringFromClass([icon class])];
 }
 
-static UIImage *BFImageForIcon(id icon) {
+static NSString *BFBundleIdentifierForIcon(id icon) {
+    if (!icon) return nil;
+
+    NSArray<NSString *> *directSelectors = @[
+        @"applicationBundleID",
+        @"bundleIdentifier",
+        @"applicationBundleIdentifier"
+    ];
+    for (NSString *selectorName in directSelectors) {
+        id value = BFSendObject0(icon, selectorName);
+        if ([value isKindOfClass:[NSString class]] && [value length] > 0) return value;
+    }
+
+    // iOS has moved the bundle identifier between the icon and its application
+    // object over time, so follow the common ownership objects dynamically.
+    NSArray<NSString *> *ownerSelectors = @[
+        @"application",
+        @"applicationProxy",
+        @"applicationInfo"
+    ];
+    for (NSString *ownerSelector in ownerSelectors) {
+        id owner = BFSendObject0(icon, ownerSelector);
+        if (!owner) continue;
+        for (NSString *selectorName in directSelectors) {
+            id value = BFSendObject0(owner, selectorName);
+            if ([value isKindOfClass:[NSString class]] && [value length] > 0) return value;
+        }
+    }
+
+    // nodeIdentifier is commonly the bundle id for application icons. Only use
+    // it as a final fallback when it looks bundle-id-like, never for folders.
+    id nodeIdentifier = BFSendObject0(icon, @"nodeIdentifier");
+    if ([nodeIdentifier isKindOfClass:[NSString class]]) {
+        NSString *node = (NSString *)nodeIdentifier;
+        if ([node rangeOfString:@"."].location != NSNotFound &&
+            [node rangeOfString:@"folder" options:NSCaseInsensitiveSearch].location == NSNotFound) {
+            return node;
+        }
+    }
+    return nil;
+}
+
+static UIImage *BFImageForBundleIdentifier(NSString *bundleIdentifier) {
+    if (![bundleIdentifier isKindOfClass:[NSString class]] || bundleIdentifier.length == 0) return nil;
+
+    Class imageClass = [UIImage class];
+    CGFloat scale = UIScreen.mainScreen.scale;
+    NSInteger format = UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? 8 : 10;
+
+    // This UIKit private entry point remains used by modern jailbreak tooling and
+    // avoids depending on SBIcon's older generateIconImageWithInfo: implementation.
+    SEL selector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if ([imageClass respondsToSelector:selector]) {
+        typedef UIImage *(*BFBundleImageMessage)(id, SEL, NSString *, NSInteger, CGFloat);
+        UIImage *image = ((BFBundleImageMessage)objc_msgSend)(imageClass, selector,
+                                                              bundleIdentifier, format, scale);
+        if (image && image.CGImage) return image;
+    }
+
+    selector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:roleIdentifier:format:scale:");
+    if ([imageClass respondsToSelector:selector]) {
+        typedef UIImage *(*BFRoleBundleImageMessage)(id, SEL, NSString *, id, NSInteger, CGFloat);
+        UIImage *image = ((BFRoleBundleImageMessage)objc_msgSend)(imageClass, selector,
+                                                                  bundleIdentifier, nil, format, scale);
+        if (image && image.CGImage) return image;
+    }
+    return nil;
+}
+
+static UIImage *BFGeneratedImageForIcon(id icon) {
     if (!icon) return nil;
     SEL selector = NSSelectorFromString(@"generateIconImageWithInfo:");
     if (![icon respondsToSelector:selector]) return nil;
@@ -335,24 +398,32 @@ static UIImage *BFImageForIcon(id icon) {
     info.scale = UIScreen.mainScreen.scale;
 
     typedef UIImage *(*BFImageMessage)(id, SEL, BFIconImageInfo);
-    return ((BFImageMessage)objc_msgSend)(icon, selector, info);
+    UIImage *image = ((BFImageMessage)objc_msgSend)(icon, selector, info);
+    return (image && image.CGImage) ? image : nil;
 }
 
-static UIColor *BFDominantColorForIcon(id originalIcon) {
+static UIImage *BFImageForIcon(id icon) {
+    NSString *bundleIdentifier = BFBundleIdentifierForIcon(icon);
+    UIImage *image = BFImageForBundleIdentifier(bundleIdentifier);
+    if (image) return image;
+    return BFGeneratedImageForIcon(icon);
+}
+
+static UIColor *BFAdaptiveColorForIcon(id originalIcon) {
     id icon = BFEffectiveIcon(originalIcon);
     if (!icon) return nil;
+
     NSString *cacheKey = BFIconIdentifier(icon);
-    UIColor *cached = [BFDominantColorCache objectForKey:cacheKey];
+    UIColor *cached = [BFAdaptiveColorCache objectForKey:cacheKey];
     if (cached) return cached;
 
     UIImage *image = BFImageForIcon(icon);
-    UIColor *dominant = BFDominantColorFromImage(image);
-    if (dominant && cacheKey) [BFDominantColorCache setObject:dominant forKey:cacheKey];
-    return dominant;
+    UIColor *average = BFAverageColorFromImage(image);
+    if (average && cacheKey) [BFAdaptiveColorCache setObject:average forKey:cacheKey];
+    return average;
 }
-
 static BFPalette *BFPaletteForIcon(id icon) {
-    UIColor *adaptiveBackground = BFDominantColorForIcon(icon) ?: [UIColor systemRedColor];
+    UIColor *adaptiveBackground = BFAdaptiveColorForIcon(icon) ?: [UIColor systemRedColor];
     UIColor *background = BFBadgeColorType == 1
         ? BFColorFromHex(BFBadgeColorHex, [UIColor systemRedColor])
         : adaptiveBackground;
@@ -519,7 +590,7 @@ static void BFSettingsChanged(CFNotificationCenterRef center, void *observer, CF
                               const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
         BFLoadPreferences();
-        [BFDominantColorCache removeAllObjects];
+        [BFAdaptiveColorCache removeAllObjects];
         BFRefreshAllBadges();
     });
 }
@@ -592,8 +663,8 @@ static void BFPerformRespring(CFNotificationCenterRef center, void *observer, CF
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
         BFLiveBadgeViews = [NSHashTable weakObjectsHashTable];
-        BFDominantColorCache = [NSCache new];
-        BFDominantColorCache.countLimit = 256;
+        BFAdaptiveColorCache = [NSCache new];
+        BFAdaptiveColorCache.countLimit = 256;
         BFLoadPreferences();
 
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),

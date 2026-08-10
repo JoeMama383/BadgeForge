@@ -68,14 +68,28 @@ makefile = (root / "Makefile").read_text()
 if "export TARGET = iphone:clang:16.5:15.0" not in makefile:
     errors.append("root Makefile does not export the patched SDK target to subprojects")
 
+
+# Adaptive badge color must use the iOS 17-capable bundle icon path first and
+# compute a weighted average rather than falling straight back to stock red.
+for token in [
+    "_applicationIconImageForBundleIdentifier:format:scale:",
+    "BFBundleIdentifierForIcon",
+    "BFAverageColorFromImage",
+    "BFAdaptiveColorForIcon",
+]:
+    if token not in source:
+        errors.append(f"Tweak.xm missing adaptive-color component: {token}")
+if "? 8 : 10" not in source:
+    errors.append("Tweak.xm missing modern iPad/iPhone icon format selection (8/10)")
+
 # Keep user-visible/package versions synchronized.
-if "Version: 1.0.3" not in control:
-    errors.append("control version is not 1.0.3")
+if "Version: 1.0.4" not in control:
+    errors.append("control version is not 1.0.4")
 info = (root / "badgeforgeprefs/Resources/Info.plist").read_text()
-if "<string>1.0.3</string>" not in info:
-    errors.append("preference bundle version is not 1.0.3")
-if "BadgeForge 1.0.3 • iOS 17 rootless" not in prefs_text:
-    errors.append("preference footer version is not 1.0.3")
+if "<string>1.0.4</string>" not in info:
+    errors.append("preference bundle version is not 1.0.4")
+if "BadgeForge 1.0.4 • iOS 17 rootless" not in prefs_text:
+    errors.append("preference footer version is not 1.0.4")
 
 if errors:
     print("\nFAILED")
