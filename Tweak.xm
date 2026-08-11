@@ -1338,7 +1338,7 @@ static void BFBindBadgeDescendants(UIView *root, id icon, NSUInteger depth) {
 %ctor {
     @autoreleasepool {
         if (!NSClassFromString(@"SBIconBadgeView")) return;
-        BFProbeLog(@"\n\n===== BadgeForge 1.0.13 probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
+        BFProbeLog(@"\n\n===== BadgeForge 1.0.15 v1.0.13-baseline probe start iOS=%@ process=%@ SBIconBadgeView=%@ =====", UIDevice.currentDevice.systemVersion, NSProcessInfo.processInfo.processName, NSClassFromString(@"SBIconBadgeView"));
         BFProbeJailbreakEnvironment();
         BFProbeDiscoverBadgeClasses();
         Class badgeClass = NSClassFromString(@"SBIconBadgeView");

@@ -33,6 +33,13 @@ Runtime package dependencies are declared in `control`. LibColorPicker is used b
 
 The tweak uses only a declaration for `SBIconBadgeView` and dynamically resolves the other SpringBoard selectors it needs. It does not bundle or redistribute the original Tinge binary or preference resources.
 
+## v1.0.15
+
+- Restores the v1.0.13 renderer/lifecycle as the test baseline instead of the v1.0.14 renderer rewrite.
+- Adds plist-first reads for non-color preferences so badge mode and border width/type do not rely only on cfprefsd.
+- Keys each cached badge palette to the current icon identifier so a reused SBIconBadgeView cannot inherit another app's palette.
+- No v1.0.14 authoritative updateBadgeColors/CG-mask renderer logic is included.
+
 ## v1.0.14
 
 - Rebuild badge painting around the narrow lifecycle used by the supplied Tinge reference: compute/store the palette before SpringBoard configuration, then paint the stock `_backgroundView` and `_textView` after configuration and after `drawRect:`.
